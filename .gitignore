@@ -1,0 +1,21 @@
+# Python environments and generated tooling state
+.venv/
+__pycache__/
+*.py[cod]
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.ty/
+*.egg-info/
+build/
+dist/
+
+# Local RAG corpus and derived indexes are intentionally not versioned.
+data/raw/
+data/processed/
+data/moulinette/
+data/datasets_public/
+
+# Downloaded subject/repository archives stay local.
+data/*.zip
+data/*.pdf
