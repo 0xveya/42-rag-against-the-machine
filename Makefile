@@ -7,7 +7,6 @@ MAIN ?= -m rag_against_the_machine.main
 ARGS ?= 
 
 MYPY_FLAGS = --warn-return-any --warn-unused-ignores --ignore-missing-imports --disallow-untyped-defs --check-untyped-defs
-FLAKE8_FLAGS = --max-line-length=100 --extend-ignore=E203 --exclude=.venv,.git,data,__pycache__,.mypy_cache,.ruff_cache,.pytest_cache,.ty,dist,build,test_env,test_venv,test_install
 
 FLAKE8 = uv run flake8
 MYPY = uv run mypy
@@ -47,11 +46,11 @@ clean:
 	rm -rf dist build rag_against_the_machine.egg-info rag_against_the_machine-*.whl rag_against_the_machine-*.tar.gz
 
 lint:
-	$(FLAKE8) $(FLAKE8_FLAGS) .
+	$(FLAKE8) .
 	$(MYPY) rag_against_the_machine $(MYPY_FLAGS)
 
 lint-strict:
-	$(FLAKE8) $(FLAKE8_FLAGS) .
+	$(FLAKE8) .
 	$(MYPY) rag_against_the_machine
 
 format:
