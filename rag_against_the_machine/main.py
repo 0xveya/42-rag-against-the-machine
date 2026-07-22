@@ -2,12 +2,10 @@
 
 import sys
 from dataclasses import dataclass, field
-
-import fire
-import uvicorn
+from os.path import basename
 
 from .cli_fw import Command
-from .server.app import create_app
+from .errors import Err
 
 
 @dataclass(frozen=True)
@@ -19,6 +17,10 @@ class ServeOptions:
 
 def serve(port: int = 8000) -> None:
     """Run the bootstrap FastAPI server with its health endpoint."""
+    import uvicorn
+
+    from .server.app import create_app
+
     uvicorn.run(create_app(), host="127.0.0.1", port=port)
 
 
@@ -52,8 +54,28 @@ def render_framework_help(argv: list[str]) -> bool:
     return True
 
 
+def validate_framework_arguments(argv: list[str]) -> bool:
+    """Validate command syntax with cli_fw without replacing Fire execution."""
+    full_cli = [basename(sys.argv[0]), *argv]
+    result = build_help_command().execute(argv, diagnostic_argv=full_cli)
+    if isinstance(result, Err):
+        result.print_diagnostic()
+        return False
+    return True
+
+
+def run_with_fire() -> None:
+    """Load Python Fire only once framework validation has succeeded."""
+    import fire
+
+    fire.Fire({"serve": serve})
+
+
 def main() -> None:
     """Render framework help and delegate command execution to Python Fire."""
-    if render_framework_help(sys.argv[1:]):
+    argv = sys.argv[1:]
+    if render_framework_help(argv):
         return
-    fire.Fire({"serve": serve})
+    if not validate_framework_arguments(argv):
+        raise SystemExit(2)
+    run_with_fire()

@@ -19,3 +19,4 @@ data/datasets_public/
 # Downloaded subject/repository archives stay local.
 data/*.zip
 data/*.pdf
+*.db

@@ -6,6 +6,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import MISSING, dataclass, field, fields, is_dataclass
 from enum import Enum, auto
+from os.path import basename
 from typing import Any, TypeVar, cast, get_args, get_origin, get_type_hints
 
 from .errors import CliError, Diagnostic, Err, Ok, Result
@@ -226,7 +227,11 @@ class Parser:
             )
         )
 
-    def parse(self, argv: list[str] | None = None) -> Result[dict[str, object], CliError]:
+    def parse(
+        self,
+        argv: list[str] | None = None,
+        diagnostic_argv: list[str] | None = None,
+    ) -> Result[dict[str, object], CliError]:
         """Parse the command line arguments."""
         if argv is None:
             argv = sys.argv[1:]
@@ -235,7 +240,7 @@ class Parser:
             self.help()
             sys.exit(0)
 
-        raw_cmd_string = " ".join(argv)
+        raw_cmd_string = " ".join(diagnostic_argv if diagnostic_argv is not None else argv)
         possible = {a.name for a in self.args}
         possible.add(self.help_flag)
 
@@ -243,7 +248,7 @@ class Parser:
         positional_values: list[str] = []
         it = iter(argv)
 
-        current_file = argv[0] if argv else "cli"
+        current_file = sys.argv[0] if sys.argv else "cli"
         for token in it:
             if token.startswith("-"):
                 name = token.lstrip("-")
@@ -452,8 +457,9 @@ class Parser:
         self,
         schema: type[T],
         argv: list[str] | None = None,
+        diagnostic_argv: list[str] | None = None,
     ) -> Result[T, CliError]:
-        result = self.parse(argv)
+        result = self.parse(argv, diagnostic_argv)
 
         match result:
             case Err() as err:
@@ -588,10 +594,16 @@ class Command:
                 break
         return current, args
 
-    def execute(self, argv: list[str] | None = None) -> Result[Any, CliError]:
+    def execute(
+        self,
+        argv: list[str] | None = None,
+        diagnostic_argv: list[str] | None = None,
+    ) -> Result[Any, CliError]:
         """Parse arguments, resolve subcommand, instantiate schema, and execute it."""
         if argv is None:
             argv = sys.argv[1:]
+        if diagnostic_argv is None:
+            diagnostic_argv = argv
 
         # Check for help flag anywhere in argv
         help_flag = "help"
@@ -605,10 +617,33 @@ class Command:
 
         if target_cmd.commands and not target_cmd.schema:
             # It's a command group with no schema, so we require a subcommand
+            if remaining_argv:
+                token = remaining_argv[0]
+                raw_cmd_string = " ".join(diagnostic_argv)
+                col_start = raw_cmd_string.find(token)
+                col_end = col_start + len(token)
+                if token.startswith("-"):
+                    help_msg = f"Unknown argument: {token}"
+                else:
+                    best_match, distance = _find_best_string_match(token, target_cmd.commands)
+                    if best_match and distance is not None and distance <= 2:
+                        help_msg = f"Unknown command: {token}. Did you mean '{best_match}'?"
+                    else:
+                        help_msg = f"Unknown command: {token}"
+                diag = Diagnostic(
+                    filename=basename(sys.argv[0]) if sys.argv else "cli",
+                    line_num=1,
+                    line_text=raw_cmd_string,
+                    col_start=max(0, col_start),
+                    col_end=max(0, col_end),
+                    help_msg=help_msg,
+                )
+                return CliErr(CliError.UNKNOWN_ARGUMENT, diag)
+
             target_cmd.help()
-            raw_cmd_string = " ".join(argv)
+            raw_cmd_string = " ".join(diagnostic_argv)
             diag = Diagnostic(
-                filename=argv[0] if argv else "cli",
+                filename=basename(sys.argv[0]) if sys.argv else "cli",
                 line_num=1,
                 line_text=raw_cmd_string,
                 col_start=0,
@@ -620,7 +655,11 @@ class Command:
         if target_cmd.schema:
             desc = target_cmd.long or target_cmd.short
             parser = Parser.from_dataclass(target_cmd.schema, description=desc)
-            res = parser.parse_into(target_cmd.schema, remaining_argv)
+            res = parser.parse_into(
+                target_cmd.schema,
+                remaining_argv,
+                diagnostic_argv=diagnostic_argv,
+            )
             match res:
                 case Err() as err:
                     return err
