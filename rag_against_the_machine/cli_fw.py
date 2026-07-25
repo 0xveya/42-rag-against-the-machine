@@ -1,7 +1,5 @@
 """Command line argument parser."""
 
-# i really need unit tests for this
-
 import sys
 from collections.abc import Callable
 from dataclasses import MISSING, dataclass, field, fields, is_dataclass
@@ -16,7 +14,9 @@ T = TypeVar("T")
 HelpRenderer = Callable[["Parser"], None]
 
 
-def CliErr(error: CliError, diagnostic: Diagnostic | None = None) -> Err[CliError]:
+def CliErr(
+    error: CliError, diagnostic: Diagnostic | None = None
+) -> Err[CliError]:
     """Helper to automatically bake module defaults into every error."""
     return Err(
         error=error,
@@ -70,7 +70,11 @@ def _resolve_type(typ: Any) -> Any:
     import typing
 
     origin = get_origin(typ)
-    UnionTypes = (types.UnionType, typing.Union) if hasattr(types, "UnionType") else (typing.Union,)
+    UnionTypes = (
+        (types.UnionType, typing.Union)
+        if hasattr(types, "UnionType")
+        else (typing.Union,)
+    )
     if origin in UnionTypes:
         args = [t for t in get_args(typ) if t is not type(None)]
         if len(args) == 1:
@@ -90,7 +94,9 @@ def _collect_args(
         typ = type_hints.get(f.name, f.type)
         resolved_typ = _resolve_type(typ)
 
-        required = parent_required and (f.default is MISSING and f.default_factory is MISSING)
+        required = parent_required and (
+            f.default is MISSING and f.default_factory is MISSING
+        )
 
         default = None
         if parent_default is not None:
@@ -122,7 +128,11 @@ def _collect_args(
             else:
                 origin = get_origin(resolved_typ)
                 if origin is not None:
-                    args = [t for t in get_args(resolved_typ) if t is not type(None)]
+                    args = [
+                        t
+                        for t in get_args(resolved_typ)
+                        if t is not type(None)
+                    ]
                     if len(args) == 1:
                         arg_type = cast(type[Any], args[0])
                 else:
@@ -159,10 +169,15 @@ def _instantiate_schema(
         resolved_typ = _resolve_type(typ)
         key = f"{prefix}{f.name}"
         if is_dataclass(resolved_typ):
-            any_provided = any(k.startswith(f"{key}.") for k in explicitly_provided)
+            any_provided = any(
+                k.startswith(f"{key}.") for k in explicitly_provided
+            )
             if any_provided:
                 args_dict[f.name] = _instantiate_schema(
-                    cast(type[Any], resolved_typ), values, explicitly_provided, f"{key}."
+                    cast(type[Any], resolved_typ),
+                    values,
+                    explicitly_provided,
+                    f"{key}.",
                 )
             else:
                 if f.default is not MISSING:
@@ -171,7 +186,10 @@ def _instantiate_schema(
                     args_dict[f.name] = f.default_factory()
                 else:
                     args_dict[f.name] = _instantiate_schema(
-                        cast(type[Any], resolved_typ), values, explicitly_provided, f"{key}."
+                        cast(type[Any], resolved_typ),
+                        values,
+                        explicitly_provided,
+                        f"{key}.",
                     )
         else:
             args_dict[f.name] = values.get(key)
@@ -240,7 +258,9 @@ class Parser:
             self.help()
             sys.exit(0)
 
-        raw_cmd_string = " ".join(diagnostic_argv if diagnostic_argv is not None else argv)
+        raw_cmd_string = " ".join(
+            diagnostic_argv if diagnostic_argv is not None else argv
+        )
         possible = {a.name for a in self.args}
         possible.add(self.help_flag)
 
@@ -286,7 +306,9 @@ class Parser:
                                 line_text=raw_cmd_string,
                                 col_start=max(0, col_start),
                                 col_end=max(0, col_end),
-                                help_msg=(f"Option --{name} requires an argument"),
+                                help_msg=(
+                                    f"Option --{name} requires an argument"
+                                ),
                             )
                             return CliErr(
                                 CliError.MISSING_ARGUMENT_VALUE,
@@ -307,9 +329,13 @@ class Parser:
             else:
                 positional_values.append(token)
 
-        positional_args = [a for a in self.args if getattr(a, "positional", False)]
+        positional_args = [
+            a for a in self.args if getattr(a, "positional", False)
+        ]
         seen_names = {name for name, _ in parsed_tokens}
-        unbound_positional_args = [a for a in positional_args if a.name not in seen_names]
+        unbound_positional_args = [
+            a for a in positional_args if a.name not in seen_names
+        ]
 
         val_idx = 0
         for i, arg in enumerate(unbound_positional_args):
@@ -349,7 +375,9 @@ class Parser:
         seen = {name for name, _ in parsed_tokens}
         self.explicitly_provided = seen
 
-        missing = [a.name for a in self.args if a.required and a.name not in seen]
+        missing = [
+            a.name for a in self.args if a.required and a.name not in seen
+        ]
         if missing:
             col_start = raw_cmd_string.find(f"--{' '.join(missing)}")
             if col_start == -1:
@@ -361,7 +389,9 @@ class Parser:
                 line_text=raw_cmd_string,
                 col_start=max(0, col_start),
                 col_end=max(0, col_end),
-                help_msg=(f"Missing required arguments: {', '.join(f'--{m}' for m in missing)}"),
+                help_msg=(
+                    f"Missing required arguments: {', '.join(f'--{m}' for m in missing)}"
+                ),
             )
             return CliErr(CliError.MISSING_REQUIRED_ARGUMENT, diag)
 
@@ -382,7 +412,9 @@ class Parser:
                 except (ValueError, TypeError):
                     val_str = str(token_val) if token_val is not None else ""
                     col_start = raw_cmd_string.rfind(val_str)
-                    col_end = col_start + len(val_str) if col_start != -1 else 0
+                    col_end = (
+                        col_start + len(val_str) if col_start != -1 else 0
+                    )
                     diag = Diagnostic(
                         filename=current_file,
                         line_num=1,
@@ -399,15 +431,21 @@ class Parser:
                 if arg.choices and token_val not in arg.choices:
                     val_str = str(token_val) if token_val is not None else ""
                     col_start = raw_cmd_string.rfind(val_str)
-                    col_end = col_start + len(val_str) if col_start != -1 else 0
-                    best_match, dist = _find_best_string_match(val_str, arg.choices)
+                    col_end = (
+                        col_start + len(val_str) if col_start != -1 else 0
+                    )
+                    best_match, dist = _find_best_string_match(
+                        val_str, arg.choices
+                    )
                     if dist is not None and best_match and dist <= 2:
                         help_msg = (
                             f"{arg.name}: '{token_val}' not in {arg.choices}. "
                             f"Did you mean '{best_match}'?"
                         )
                     else:
-                        help_msg = f"{arg.name}: '{token_val}' not in {arg.choices}"
+                        help_msg = (
+                            f"{arg.name}: '{token_val}' not in {arg.choices}"
+                        )
                     diag = Diagnostic(
                         filename=current_file,
                         line_num=1,
@@ -423,7 +461,9 @@ class Parser:
                 except (ValueError, TypeError):
                     val_str = str(token_val) if token_val is not None else ""
                     col_start = raw_cmd_string.rfind(val_str)
-                    col_end = col_start + len(val_str) if col_start != -1 else 0
+                    col_end = (
+                        col_start + len(val_str) if col_start != -1 else 0
+                    )
                     diag = Diagnostic(
                         filename=current_file,
                         line_num=1,
@@ -492,7 +532,9 @@ class Parser:
 
         print(f"{BOLD}llm_router::help{RESET}\n")
 
-        positional_args = [a for a in self.args if getattr(a, "positional", False)]
+        positional_args = [
+            a for a in self.args if getattr(a, "positional", False)
+        ]
         pos_usage = " ".join(f"[{a.name}]" for a in positional_args)
         usage_line = "llm-router [options]"
         if pos_usage:
@@ -535,7 +577,9 @@ class Parser:
 
                 print(f" {BLUE}│{RESET}")
 
-        print(f" {BLUE}╰─▶{RESET} {CYAN}--{self.help_flag}{RESET}\n     Show this message")
+        print(
+            f" {BLUE}╰─▶{RESET} {CYAN}--{self.help_flag}{RESET}\n     Show this message"
+        )
 
     def _help_vanilla(self) -> None:
         """Prints the help menu in vanilla style."""
@@ -546,7 +590,9 @@ class Parser:
         for a in self.args:
             req = "(required)" if a.required else f"(default: {a.default})"
             arg_label = (
-                f"{a.name} (or --{a.name})" if getattr(a, "positional", False) else f"--{a.name}"
+                f"{a.name} (or --{a.name})"
+                if getattr(a, "positional", False)
+                else f"--{a.name}"
             )
 
             print(f"  {arg_label:<24} {a.help} {req}")
@@ -625,7 +671,9 @@ class Command:
                 if token.startswith("-"):
                     help_msg = f"Unknown argument: {token}"
                 else:
-                    best_match, distance = _find_best_string_match(token, target_cmd.commands)
+                    best_match, distance = _find_best_string_match(
+                        token, target_cmd.commands
+                    )
                     if best_match and distance is not None and distance <= 2:
                         help_msg = f"Unknown command: {token}. Did you mean '{best_match}'?"
                     else:
@@ -807,7 +855,9 @@ def main() -> None:
             sys.exit(1)
 
 
-def _levenshteinRecursive(str1: str, str2: str, len_str1: int, len_str2: int) -> int:
+def _levenshteinRecursive(
+    str1: str, str2: str, len_str1: int, len_str2: int
+) -> int:
     """Calculates the Levenshtein distance between two strings"""
     s1 = str1[:len_str1]
     s2 = str2[:len_str2]
@@ -857,13 +907,17 @@ def _find_best_string_match(
         (
             (
                 choice,
-                _levenshteinRecursive(target, choice, len(target), len(choice)),
+                _levenshteinRecursive(
+                    target, choice, len(target), len(choice)
+                ),
             )
             for choice in valid_choices
         ),
         key=lambda item: (
             item[1],  # levenshtein distance
-            -_common_prefix_len(target, item[0]),  # prefer common starting prefix
+            -_common_prefix_len(
+                target, item[0]
+            ),  # prefer common starting prefix
             abs(len(target) - len(item[0])),  # prefer closer string length
             item[0],  # alphabetical sorting
         ),

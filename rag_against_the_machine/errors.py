@@ -2,7 +2,15 @@
 
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import ClassVar, Generic, TypeAlias, TypeVar, Any, NoReturn, Callable
+from typing import (
+    ClassVar,
+    Generic,
+    TypeAlias,
+    TypeVar,
+    Any,
+    NoReturn,
+    Callable,
+)
 
 
 class CliError(Enum):
@@ -13,6 +21,38 @@ class CliError(Enum):
     INVALID_CHOICE = auto()
     INVALID_ARGUMENT_TYPE = auto()
     MISSING_ARGUMENT_VALUE = auto()
+
+
+class DiscoveryError(Enum):
+    """Enumerate failure modes encountered during file discovery."""
+
+    SOURCE_DOES_NOT_EXIST = auto()
+    SOURCE_IS_NOT_A_DIRECTORY = auto()
+    SOURCE_IS_NOT_READABLE = auto()
+    SOURCE_OUTSIDE_PROJECT = auto()
+    PROJECT_DOES_NOT_EXIST = auto()
+    PROJECT_IS_NOT_A_DIRECTORY = auto()
+    DIRECTORY_TRAVERSAL_FAILED = auto()
+
+
+class ReadError(Enum):
+    FILE_NOT_FOUND = auto()
+    FILE_NOT_READABLE = auto()
+    FILE_READ_FAILED = auto()
+
+
+class ChunkingError(Enum):
+    INVALID_MAX_CHUNK_SIZE = auto()
+    PYTHON_PARSE_FAILED = auto()
+    MARKDOWN_PARSE_FAILED = auto()
+    INVALID_CHARACTER_RANGE = auto()
+    CHUNK_TOO_LARGE = auto()
+    CHUNKING_FAILED = auto()
+
+
+class IndexingError(Enum):
+    INDEX_WRITE_FAILED = auto()
+    INDEX_SAVE_FAILED = auto()
 
 
 E = TypeVar("E", bound=Enum)
@@ -80,7 +120,9 @@ class Err(Generic[E]):
     def unwrap(self) -> NoReturn:
         """Panics and prints the diagnostic error context."""
         self.print_diagnostic()
-        raise ValueError(f"Called `Result::unwrap()` on an `Err` value: {self.error.name}")
+        raise ValueError(
+            f"Called `Result::unwrap()` on an `Err` value: {self.error.name}"
+        )
 
     def print_diagnostic(self) -> None:
         """Prints a diagnostic message with dynamic caret alignment."""
@@ -104,7 +146,9 @@ class Err(Generic[E]):
 
         if not self.diagnostic:
             print(f" {RED}×{RESET} {BOLD}Operation failed{RESET}")
-            print(f"   {RED}╰─▶{RESET} {err_name_str.replace('_', ' ').title()}")
+            print(
+                f"   {RED}╰─▶{RESET} {err_name_str.replace('_', ' ').title()}"
+            )
             return
 
         d = self.diagnostic

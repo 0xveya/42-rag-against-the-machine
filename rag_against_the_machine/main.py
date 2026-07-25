@@ -12,7 +12,30 @@ from .errors import Err
 class ServeOptions:
     """Document the options accepted by the development server command."""
 
-    port: int = field(default=8000, metadata={"help": "Port for the local API server."})
+    port: int = field(
+        default=8000, metadata={"help": "Port for the local API server."}
+    )
+
+
+def tmp() -> None:
+    """Temporary testing command."""
+    from .indexing.discovery import discover_files
+    from pathlib import Path
+    from dataclasses import asdict
+    import json
+
+    files = discover_files(
+        source_root=Path("data/raw/gns3util"),
+        project_root=Path.cwd(),
+    ).unwrap()
+
+    print(
+        json.dumps(
+            [asdict(file) for file in files],
+            default=str,
+            indent=2,
+        )
+    )
 
 
 def serve(port: int = 8000) -> None:
@@ -31,13 +54,20 @@ def build_help_command() -> Command:
         short="Local RAG system for the supplied vLLM repository.",
         example="uv run python -m rag_against_the_machine serve --port 8000",
     )
-    root.add_command(
+    _ = root.add_command(
         Command(
             name="serve",
             short="Run the bootstrap FastAPI server.",
             schema=ServeOptions,
         )
     )
+    _ = root.add_command(
+        Command(
+            name="tmp",
+            short="Temporary testing command.",
+        )
+    )
+
     return root
 
 
@@ -68,7 +98,7 @@ def run_with_fire() -> None:
     """Load Python Fire only once framework validation has succeeded."""
     import fire
 
-    fire.Fire({"serve": serve})
+    fire.Fire({"serve": serve, "tmp": tmp})
 
 
 def main() -> None:
