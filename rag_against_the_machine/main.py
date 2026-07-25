@@ -4,6 +4,8 @@ import sys
 from dataclasses import dataclass, field
 from os.path import basename
 
+from rag_against_the_machine.indexing.chunker import chunk_source_file, validate_chunks
+
 from .cli_fw import Command
 from .errors import Err
 
@@ -29,8 +31,11 @@ def tmp() -> None:
         project_root=Path.cwd(),
     ).unwrap()
     for file in files:
-        print(file)
-        print(read_source_file(file).unwrap())
+        # print(file)
+        content = read_source_file(file).unwrap()
+        chunks = chunk_source_file(file, content, 1_500).unwrap()
+        validate_chunks(content, chunks, 1500)
+        # print(json.dumps([asdict(x) for x in chunks], separators=(",", ":")))
 
 
 def serve(port: int = 8000) -> None:
