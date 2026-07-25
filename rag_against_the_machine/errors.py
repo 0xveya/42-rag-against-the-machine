@@ -1,9 +1,19 @@
 """Shared result and error types for Python CLI and parsing utilities."""
 
+from __future__ import annotations
 from collections.abc import Callable
+from functools import wraps
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Any, ClassVar, Generic, NoReturn, TypeAlias, TypeVar
+from typing import (
+    Any,
+    ClassVar,
+    Generic,
+    NoReturn,
+    TypeAlias,
+    TypeVar,
+    ParamSpec,
+)
 
 
 class CliError(Enum):
@@ -197,3 +207,79 @@ class Err(Generic[E]):
 
 
 Result: TypeAlias = Ok[T] | Err[E]
+
+P = ParamSpec("P")
+
+
+class BubbleUpNothing(Exception):
+    """Internal exception used to bubble Nothing through a decorator."""
+
+    nothing: Nothing
+
+    def __init__(self, nothing: Nothing) -> None:
+        super().__init__("Attempted to bubble up Nothing")
+        self.nothing = nothing
+
+
+@dataclass(frozen=True)
+class Some(Generic[T]):
+    """Wrap a present optional value."""
+
+    value: T
+
+    def unwrap(self) -> T:
+        """Return the contained value."""
+        return self.value
+
+    def unwrap_or(self, _default: T) -> T:
+        """Return the contained value."""
+        return self.value
+
+    def expect(self, _message: str) -> T:
+        """Return the contained value."""
+        return self.value
+
+    @property
+    def q(self) -> T:
+        """Return the value or propagate absence."""
+        return self.value
+
+
+@dataclass(frozen=True)
+class Nothing:
+    """Represent the absence of a value."""
+
+    def unwrap(self) -> NoReturn:
+        """Raise because no value is present."""
+        raise ValueError("Called `Option::unwrap()` on a `Nothing` value")
+
+    def unwrap_or(self, default: T) -> T:
+        """Return the provided default value."""
+        return default
+
+    def expect(self, message: str) -> NoReturn:
+        """Raise with a caller-provided explanation."""
+        raise ValueError(message)
+
+    @property
+    def q(self) -> NoReturn:
+        """Bubble Nothing to a catching decorator."""
+        raise BubbleUpNothing(self)
+
+
+Option: TypeAlias = Some[T] | Nothing
+
+
+def catch_nothing(
+    func: Callable[P, Option[T]],
+) -> Callable[P, Option[T]]:
+    """Convert bubbled Nothing values into returned Nothing values."""
+
+    @wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> Option[T]:
+        try:
+            return func(*args, **kwargs)
+        except BubbleUpNothing as bubbled:
+            return bubbled.nothing
+
+    return wrapper

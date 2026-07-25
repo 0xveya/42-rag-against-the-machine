@@ -1,8 +1,13 @@
 """Asynchronous dispatch of source-file reading and chunking."""
 
+from __future__ import annotations
+
 import asyncio
+import hashlib
 import os
+import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from rag_against_the_machine.errors import (
     Diagnostic,
@@ -17,20 +22,40 @@ from rag_against_the_machine.indexing.reader import read_source_file
 from rag_against_the_machine.models.chunk import Chunk
 from rag_against_the_machine.models.source import SourceFile
 
+from rag_against_the_machine.storage.db import (
+    ChunkInsert,
+    Store,
+    Transaction,
+)
+
+
+_CURRENT_CHUNKER_VERSION = 1
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessedFile:
+    source_file: SourceFile
+    size_bytes: int
+    modified_at_ns: int
+    content_hash: str
+    max_chunk_size: int
+    chunker_version: int
+    indexed_at_ns: int
+    chunks: list[Chunk]
+
 
 @dataclass(slots=True)
-class PipelineOutput:
-    chunks: list[Chunk]
+class WorkerOutput:
+    processed_files: list[ProcessedFile]
     diagnostics: list[Diagnostic]
-    files_discovered: int
     files_processed: int
     files_skipped: int
 
 
 @dataclass(slots=True)
-class WorkerOutput:
-    chunks: list[Chunk]
+class PipelineOutput:
     diagnostics: list[Diagnostic]
+    files_discovered: int
     files_processed: int
     files_skipped: int
 
@@ -38,11 +63,18 @@ class WorkerOutput:
 async def run_pipeline(
     source_files: list[SourceFile],
     max_chunk_size: int,
+    store: Store,
 ) -> Result[PipelineOutput, PipelineError]:
     if not source_files:
         return Err(PipelineError.EMPTY_INPUT)
-    worker_count = min(os.cpu_count() or 4, len(source_files))
+
+    worker_count = min(
+        os.cpu_count() or 4,
+        len(source_files),
+    )
+
     file_queue: asyncio.Queue[SourceFile | None] = asyncio.Queue()
+
     for source_file in source_files:
         await file_queue.put(source_file)
 
@@ -59,44 +91,71 @@ async def run_pipeline(
     except asyncio.CancelledError:
         for task in worker_tasks:
             _ = task.cancel()
-        await asyncio.gather(*worker_tasks, return_exceptions=True)
+
+        _ = await asyncio.gather(
+            *worker_tasks,
+            return_exceptions=True,
+        )
+
         return Err(PipelineError.CANCELLED)
+
     except Exception:
         for task in worker_tasks:
             if not task.done():
                 _ = task.cancel()
-        await asyncio.gather(*worker_tasks, return_exceptions=True)
+
+        _ = await asyncio.gather(
+            *worker_tasks,
+            return_exceptions=True,
+        )
+
         return Err(PipelineError.TASK_FAILED)
 
-    chunks: list[Chunk] = []
+    processed_files: list[ProcessedFile] = []
     diagnostics: list[Diagnostic] = []
-    files_processed = 0
     files_skipped = 0
 
     for output in worker_outputs:
-        chunks.extend(output.chunks)
+        processed_files.extend(output.processed_files)
         diagnostics.extend(output.diagnostics)
-        files_processed += output.files_processed
         files_skipped += output.files_skipped
+
+    files_persisted = 0
+
+    try:
+        for processed_file in processed_files:
+            await asyncio.to_thread(
+                persist_processed_file,
+                store,
+                processed_file,
+            )
+            files_persisted += 1
+
+    except asyncio.CancelledError:
+        return Err(PipelineError.CANCELLED)
+
+    except Exception:
+        return Err(PipelineError.DATABASE_FAILED)
 
     return Ok(
         PipelineOutput(
-            chunks=chunks,
             diagnostics=diagnostics,
             files_discovered=len(source_files),
-            files_processed=files_processed,
+            files_processed=files_persisted,
             files_skipped=files_skipped,
         )
     )
 
 
 async def worker(
-    file_queue: asyncio.Queue[SourceFile | None], max_chunk_size: int
+    file_queue: asyncio.Queue[SourceFile | None],
+    max_chunk_size: int,
 ) -> WorkerOutput:
-    chunks: list[Chunk] = []
+    processed_files: list[ProcessedFile] = []
     diagnostics: list[Diagnostic] = []
     files_processed = 0
     files_skipped = 0
+
     while True:
         source_file = await file_queue.get()
 
@@ -104,19 +163,24 @@ async def worker(
             if source_file is None:
                 break
 
-            result = await read_and_chunk(source_file, max_chunk_size)
+            result = await read_and_chunk(
+                source_file,
+                max_chunk_size,
+            )
+
             if isinstance(result, Ok):
-                chunks.extend(result.unwrap())
+                processed_files.append(result.unwrap())
                 files_processed += 1
             else:
                 if result.diagnostic is not None:
                     diagnostics.append(result.diagnostic)
+
                 files_skipped += 1
         finally:
             file_queue.task_done()
 
     return WorkerOutput(
-        chunks=chunks,
+        processed_files=processed_files,
         diagnostics=diagnostics,
         files_processed=files_processed,
         files_skipped=files_skipped,
@@ -126,7 +190,7 @@ async def worker(
 async def read_and_chunk(
     source_file: SourceFile,
     max_chunk_size: int,
-) -> Result[list[Chunk], FileProcessingError]:
+) -> Result[ProcessedFile, FileProcessingError]:
     read_result = await asyncio.to_thread(
         read_source_file,
         source_file,
@@ -143,7 +207,10 @@ async def read_and_chunk(
                 line_text=source_file.stored_path,
                 col_start=0,
                 col_end=len(source_file.stored_path),
-                help_msg=f"Reading failed: {read_error.name.replace('_', ' ').lower()}.",
+                help_msg=(
+                    "Reading failed: "
+                    f"{str(read_error).rsplit('.', 1)[-1].replace('_', ' ').lower()}."
+                ),
             ),
             context_msg="Source-file processing failed",
             namespace="indexing::pipeline",
@@ -169,10 +236,95 @@ async def read_and_chunk(
                 line_text=source_file.stored_path,
                 col_start=0,
                 col_end=len(source_file.stored_path),
-                help_msg=f"Chunking failed: {chunk_error.name.replace('_', ' ').lower()}.",
+                help_msg=(
+                    "Chunking failed: "
+                    f"{str(chunk_error).rsplit('.', 1)[-1].replace('_', ' ').lower()}."
+                ),
             ),
             context_msg="Source-file processing failed",
             namespace="indexing::pipeline",
         )
 
-    return Ok(chunk_result.unwrap())
+    try:
+        stat = await asyncio.to_thread(source_file.absolute_path.stat)
+
+        content_hash = await asyncio.to_thread(
+            hash_file,
+            source_file.absolute_path,
+        )
+    except OSError as error:
+        return Err(
+            FileProcessingError.READ_FAILED,
+            diagnostic=Diagnostic(
+                filename=source_file.stored_path,
+                line_num=1,
+                line_text=source_file.stored_path,
+                col_start=0,
+                col_end=len(source_file.stored_path),
+                help_msg=f"Reading file metadata failed: {error}.",
+            ),
+            context_msg="Source-file processing failed",
+            namespace="indexing::pipeline",
+        )
+
+    return Ok(
+        ProcessedFile(
+            source_file=source_file,
+            size_bytes=stat.st_size,
+            modified_at_ns=stat.st_mtime_ns,
+            content_hash=content_hash,
+            max_chunk_size=max_chunk_size,
+            chunker_version=_CURRENT_CHUNKER_VERSION,
+            indexed_at_ns=time.time_ns(),
+            chunks=chunk_result.unwrap(),
+        )
+    )
+
+
+def persist_processed_file(
+    store: Store,
+    processed: ProcessedFile,
+) -> None:
+    def operation(tx: Transaction) -> None:
+        source_file_id = tx.queries.upsert_source_file(
+            path=processed.source_file.stored_path,
+            file_type=processed.source_file.file_type,
+            size_bytes=processed.size_bytes,
+            modified_at_ns=processed.modified_at_ns,
+            content_hash=processed.content_hash,
+            max_chunk_size=processed.max_chunk_size,
+            chunker_version=processed.chunker_version,
+            indexed_at_ns=processed.indexed_at_ns,
+        ).expect("Source-file upsert did not return an id")
+
+        tx.queries.delete_chunks_for_source(source_file_id)
+
+        created_at_ns = time.time_ns()
+
+        chunk_inserts = [
+            ChunkInsert(
+                chunk_index=chunk_index,
+                text=chunk.text,
+                start_character=chunk.first_character_index,
+                end_character=chunk.last_character_index,
+                created_at_ns=created_at_ns,
+            )
+            for chunk_index, chunk in enumerate(processed.chunks)
+        ]
+
+        tx.queries.insert_chunks(
+            source_file_id,
+            chunk_inserts,
+        )
+
+    store.with_tx(operation)
+
+
+def hash_file(path: Path) -> str:
+    hasher = hashlib.sha256()
+
+    with path.open("rb") as file:
+        while block := file.read(1024 * 1024):
+            hasher.update(block)
+
+    return hasher.hexdigest()

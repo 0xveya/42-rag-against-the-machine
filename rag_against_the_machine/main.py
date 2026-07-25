@@ -30,20 +30,56 @@ def tmp() -> None:
 
 async def _tmp() -> None:
     """Temporary testing command."""
-    import json
-    from dataclasses import asdict
     from pathlib import Path
 
+    from .errors import Err
     from .indexing.discovery import discover_files
-    from .indexing.reader import read_source_file
-    from rag_against_the_machine.indexing.pipeline import run_pipeline
+    from .indexing.pipeline import run_pipeline
+    from .storage.db import Store, Transaction
 
-    files = discover_files(
+    store = Store(Path("data/output/stuff.db"))
+    store.init()
+
+    def show_tables(tx: Transaction) -> None:
+        rows = tx.conn.execute(
+            """
+            SELECT name, type
+            FROM sqlite_master
+            WHERE type IN ('table', 'view')
+            ORDER BY name
+            """
+        ).fetchall()
+
+        for row in rows:
+            print(f"{row['type']}: {row['name']}")
+
+    store.with_tx(show_tables)
+
+    discovered = discover_files(
         source_root=Path("data/raw/gns3util"),
         project_root=Path.cwd(),
-    ).unwrap()
-    result = await run_pipeline(files, 1500)
-    print(result.unwrap())
+    )
+    if isinstance(discovered, Err):
+        discovered.print_diagnostic()
+        return
+
+    pipeline_result = await run_pipeline(
+        discovered.unwrap(),
+        max_chunk_size=1500,
+        store=store,
+    )
+    if isinstance(pipeline_result, Err):
+        pipeline_result.print_diagnostic()
+        return
+
+    output = pipeline_result.unwrap()
+    print(
+        f"Indexed {output.files_processed} files; "
+        f"skipped {output.files_skipped}."
+    )
+    for diagnostic in output.diagnostics:
+        print(f"warning: {diagnostic.filename}: {diagnostic.help_msg}")
+    # print(output)
     # for file in files:
     #     # print(file)
     #     content = read_source_file(file).unwrap()
@@ -123,3 +159,7 @@ def main() -> None:
     if not validate_framework_arguments(argv):
         raise SystemExit(2)
     run_with_fire()
+
+
+if __name__ == "__main__":
+    main()
