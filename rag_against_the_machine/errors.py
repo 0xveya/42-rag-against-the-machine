@@ -38,6 +38,8 @@ class DiscoveryError(Enum):
 class ReadError(Enum):
     FILE_NOT_FOUND = auto()
     FILE_NOT_READABLE = auto()
+    FILE_IS_DIRECTORY = auto()
+    FILE_DECODE_FAILED = auto()
     FILE_READ_FAILED = auto()
 
 

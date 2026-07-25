@@ -4,22 +4,31 @@ from rag_against_the_machine.errors import (
     Diagnostic,
     DiscoveryError,
     Err,
+    ReadError,
 )
 
 
 def make_discovery_error(
     error: DiscoveryError,
-    *,
-    filename: str,
-    help_msg: str | None = None,
+    diag: Diagnostic,
 ) -> Err[DiscoveryError]:
     """Create a consistently formatted discovery error."""
     return Err(
         error=error,
-        diagnostic=Diagnostic(
-            filename=filename,
-            help_msg=help_msg,
-        ),
+        diagnostic=diag,
         namespace="indexing::discovery",
         context_msg="Source-file discovery failed",
+    )
+
+
+def make_read_error(
+    error: ReadError,
+    diag: Diagnostic,
+) -> Err[ReadError]:
+    """Create a consistently formatted source-file reading error."""
+    return Err(
+        error=error,
+        diagnostic=diag,
+        namespace="indexing::read",
+        context_msg="Source-file reading failed",
     )

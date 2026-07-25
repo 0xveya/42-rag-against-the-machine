@@ -3,7 +3,12 @@
 import os
 from pathlib import Path
 
-from rag_against_the_machine.errors import DiscoveryError
+from rag_against_the_machine.errors import (
+    Diagnostic,
+    DiscoveryError,
+    Ok,
+    Result,
+)
 from rag_against_the_machine.indexing.error_helpers import (
     make_discovery_error,
 )
@@ -11,7 +16,6 @@ from rag_against_the_machine.models.source import (
     FileType,
     SourceFile,
 )
-from rag_against_the_machine.errors import Ok, Result
 
 
 _SUFFIX_TYPES: dict[str, FileType] = {
@@ -30,6 +34,18 @@ _IGNORED_DIRECTORY_NAMES = {
     "__pycache__",
     "node_modules",
 }
+
+
+def _path_diagnostic(filename: str, help_msg: str) -> Diagnostic:
+    """Describe a path failure using a complete diagnostic location."""
+    return Diagnostic(
+        filename=filename,
+        line_num=1,
+        line_text=filename,
+        col_start=0,
+        col_end=len(filename),
+        help_msg=help_msg,
+    )
 
 
 def discover_files(
@@ -51,37 +67,45 @@ def discover_files(
     if not project_root.exists():
         return make_discovery_error(
             DiscoveryError.PROJECT_DOES_NOT_EXIST,
-            filename=str(project_root),
-            help_msg="Provide the path to the project root.",
+            _path_diagnostic(
+                str(project_root),
+                "Provide the path to the project root.",
+            ),
         )
 
     if not project_root.is_dir():
         return make_discovery_error(
             DiscoveryError.PROJECT_IS_NOT_A_DIRECTORY,
-            filename=str(project_root),
-            help_msg="The project root must refer to a directory.",
+            _path_diagnostic(
+                str(project_root),
+                "The project root must refer to a directory.",
+            ),
         )
 
     if not source_root.exists():
         return make_discovery_error(
             DiscoveryError.SOURCE_DOES_NOT_EXIST,
-            filename=str(source_root),
-            help_msg="Check that the source path exists.",
+            _path_diagnostic(
+                str(source_root),
+                "Check that the source path exists.",
+            ),
         )
 
     if not source_root.is_dir():
         return make_discovery_error(
             DiscoveryError.SOURCE_IS_NOT_A_DIRECTORY,
-            filename=str(source_root),
-            help_msg="Provide a directory containing source files.",
+            _path_diagnostic(
+                str(source_root),
+                "Provide a directory containing source files.",
+            ),
         )
 
     if not os.access(source_root, os.R_OK | os.X_OK):
         return make_discovery_error(
             DiscoveryError.SOURCE_IS_NOT_READABLE,
-            filename=str(source_root),
-            help_msg=(
-                "The directory requires read and traversal permissions."
+            _path_diagnostic(
+                str(source_root),
+                "The directory requires read and traversal permissions.",
             ),
         )
 
@@ -90,10 +114,10 @@ def discover_files(
     except ValueError:
         return make_discovery_error(
             DiscoveryError.SOURCE_OUTSIDE_PROJECT,
-            filename=str(source_root),
-            help_msg=(
+            _path_diagnostic(
+                str(source_root),
                 "Place the source directory inside the project root "
-                "so stored paths can be project-relative."
+                "so stored paths can be project-relative.",
             ),
         )
 
@@ -127,8 +151,7 @@ def discover_files(
     except OSError as exc:
         return make_discovery_error(
             DiscoveryError.DIRECTORY_TRAVERSAL_FAILED,
-            filename=str(source_root),
-            help_msg=str(exc),
+            _path_diagnostic(str(source_root), str(exc)),
         )
 
     files.sort(key=lambda source_file: source_file.stored_path)

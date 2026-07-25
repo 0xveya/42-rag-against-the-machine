@@ -12,30 +12,25 @@ from .errors import Err
 class ServeOptions:
     """Document the options accepted by the development server command."""
 
-    port: int = field(
-        default=8000, metadata={"help": "Port for the local API server."}
-    )
+    port: int = field(default=8000, metadata={"help": "Port for the local API server."})
 
 
 def tmp() -> None:
     """Temporary testing command."""
-    from .indexing.discovery import discover_files
-    from pathlib import Path
-    from dataclasses import asdict
     import json
+    from dataclasses import asdict
+    from pathlib import Path
+
+    from .indexing.discovery import discover_files
+    from .indexing.reader import read_source_file
 
     files = discover_files(
         source_root=Path("data/raw/gns3util"),
         project_root=Path.cwd(),
     ).unwrap()
-
-    print(
-        json.dumps(
-            [asdict(file) for file in files],
-            default=str,
-            indent=2,
-        )
-    )
+    for file in files:
+        print(file)
+        print(read_source_file(file).unwrap())
 
 
 def serve(port: int = 8000) -> None:

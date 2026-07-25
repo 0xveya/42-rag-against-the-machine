@@ -15,12 +15,3 @@ class SourceFile:
     absolute_path: Path
     stored_path: str
     file_type: FileType
-
-
-@dataclass(frozen=True, slots=True)
-class Chunk:
-    file_path: str
-    first_character_index: int
-    last_character_index: int
-    text: str
-    file_type: FileType
