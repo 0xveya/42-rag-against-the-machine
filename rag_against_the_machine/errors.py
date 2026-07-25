@@ -1,16 +1,9 @@
 """Shared result and error types for Python CLI and parsing utilities."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import (
-    ClassVar,
-    Generic,
-    TypeAlias,
-    TypeVar,
-    Any,
-    NoReturn,
-    Callable,
-)
+from typing import Any, ClassVar, Generic, NoReturn, TypeAlias, TypeVar
 
 
 class CliError(Enum):
@@ -55,6 +48,26 @@ class ChunkingError(Enum):
 class IndexingError(Enum):
     INDEX_WRITE_FAILED = auto()
     INDEX_SAVE_FAILED = auto()
+
+
+class PipelineError(Enum):
+    DISCOVERY_FAILED = auto()
+    TASK_FAILED = auto()
+    DATABASE_FAILED = auto()
+    CANCELLED = auto()
+    EMPTY_INPUT = auto()
+
+
+class FileProcessingStage(Enum):
+    READ = auto()
+    CHUNK = auto()
+
+
+class FileProcessingError(Enum):
+    """Failure categories returned when processing one discovered file."""
+
+    READ_FAILED = auto()
+    CHUNK_FAILED = auto()
 
 
 E = TypeVar("E", bound=Enum)

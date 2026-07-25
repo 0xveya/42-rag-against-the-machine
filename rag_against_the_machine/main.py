@@ -4,7 +4,10 @@ import sys
 from dataclasses import dataclass, field
 from os.path import basename
 
-from rag_against_the_machine.indexing.chunker import chunk_source_file, validate_chunks
+from rag_against_the_machine.indexing.chunker import (
+    chunk_source_file,
+    validate_chunks,
+)
 
 from .cli_fw import Command
 from .errors import Err
@@ -14,10 +17,18 @@ from .errors import Err
 class ServeOptions:
     """Document the options accepted by the development server command."""
 
-    port: int = field(default=8000, metadata={"help": "Port for the local API server."})
+    port: int = field(
+        default=8000, metadata={"help": "Port for the local API server."}
+    )
 
 
 def tmp() -> None:
+    import asyncio
+
+    asyncio.run(_tmp())
+
+
+async def _tmp() -> None:
     """Temporary testing command."""
     import json
     from dataclasses import asdict
@@ -25,17 +36,20 @@ def tmp() -> None:
 
     from .indexing.discovery import discover_files
     from .indexing.reader import read_source_file
+    from rag_against_the_machine.indexing.pipeline import run_pipeline
 
     files = discover_files(
         source_root=Path("data/raw/gns3util"),
         project_root=Path.cwd(),
     ).unwrap()
-    for file in files:
-        # print(file)
-        content = read_source_file(file).unwrap()
-        chunks = chunk_source_file(file, content, 1_500).unwrap()
-        validate_chunks(content, chunks, 1500)
-        # print(json.dumps([asdict(x) for x in chunks], separators=(",", ":")))
+    result = await run_pipeline(files, 1500)
+    print(result.unwrap())
+    # for file in files:
+    #     # print(file)
+    #     content = read_source_file(file).unwrap()
+    #     chunks = chunk_source_file(file, content, 1_500).unwrap()
+    #     validate_chunks(content, chunks, 1500)
+    #     # print(json.dumps([asdict(x) for x in chunks], separators=(",", ":")))
 
 
 def serve(port: int = 8000) -> None:
