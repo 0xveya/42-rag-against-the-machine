@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import os
 import time
 from dataclasses import dataclass
@@ -30,6 +31,7 @@ from rag_against_the_machine.storage.db import (
 
 
 _CURRENT_CHUNKER_VERSION = 1
+_MAX_FILES_PER_TRANSACTION = 25
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,13 +125,18 @@ async def run_pipeline(
     files_persisted = 0
 
     try:
-        for processed_file in processed_files:
+        # Commit bounded batches so completed work is flushed incrementally.
+        # This avoids one transaction per file without making the whole run
+        # one large all-or-nothing transaction.
+        batch_size = persistence_batch_size(len(processed_files))
+        for batch_start in range(0, len(processed_files), batch_size):
+            batch = processed_files[batch_start : batch_start + batch_size]
             await asyncio.to_thread(
-                persist_processed_file,
+                persist_processed_files,
                 store,
-                processed_file,
+                batch,
             )
-            files_persisted += 1
+            files_persisted += len(batch)
 
     except asyncio.CancelledError:
         return Err(PipelineError.CANCELLED)
@@ -281,43 +288,61 @@ async def read_and_chunk(
     )
 
 
-def persist_processed_file(
+def persistence_batch_size(file_count: int) -> int:
+    """Choose a bounded batch size from the number of files to persist."""
+    if file_count <= 0:
+        return 1
+
+    transaction_count = max(
+        1,
+        math.ceil(file_count / _MAX_FILES_PER_TRANSACTION),
+    )
+    return math.ceil(file_count / transaction_count)
+
+
+def persist_processed_files(
     store: Store,
-    processed: ProcessedFile,
+    processed_files: list[ProcessedFile],
 ) -> None:
+    """Persist one bounded batch and commit it as a single transaction."""
+
     def operation(tx: Transaction) -> None:
-        source_file_id = tx.queries.upsert_source_file(
-            path=processed.source_file.stored_path,
-            file_type=processed.source_file.file_type,
-            size_bytes=processed.size_bytes,
-            modified_at_ns=processed.modified_at_ns,
-            content_hash=processed.content_hash,
-            max_chunk_size=processed.max_chunk_size,
-            chunker_version=processed.chunker_version,
-            indexed_at_ns=processed.indexed_at_ns,
-        ).expect("Source-file upsert did not return an id")
-
-        tx.queries.delete_chunks_for_source(source_file_id)
-
-        created_at_ns = time.time_ns()
-
-        chunk_inserts = [
-            ChunkInsert(
-                chunk_index=chunk_index,
-                text=chunk.text,
-                start_character=chunk.first_character_index,
-                end_character=chunk.last_character_index,
-                created_at_ns=created_at_ns,
-            )
-            for chunk_index, chunk in enumerate(processed.chunks)
-        ]
-
-        tx.queries.insert_chunks(
-            source_file_id,
-            chunk_inserts,
-        )
+        for processed in processed_files:
+            persist_processed_file(tx, processed)
 
     store.with_tx(operation)
+
+
+def persist_processed_file(
+    tx: Transaction,
+    processed: ProcessedFile,
+) -> None:
+    """Write one file using an already-open transaction."""
+    source_file_id = tx.queries.upsert_source_file(
+        path=processed.source_file.stored_path,
+        file_type=processed.source_file.file_type,
+        size_bytes=processed.size_bytes,
+        modified_at_ns=processed.modified_at_ns,
+        content_hash=processed.content_hash,
+        max_chunk_size=processed.max_chunk_size,
+        chunker_version=processed.chunker_version,
+        indexed_at_ns=processed.indexed_at_ns,
+    ).expect("Source-file upsert did not return an id")
+
+    tx.queries.delete_chunks_for_source(source_file_id)
+
+    created_at_ns = time.time_ns()
+    chunk_inserts = [
+        ChunkInsert(
+            chunk_index=chunk_index,
+            text=chunk.text,
+            start_character=chunk.first_character_index,
+            end_character=chunk.last_character_index,
+            created_at_ns=created_at_ns,
+        )
+        for chunk_index, chunk in enumerate(processed.chunks)
+    ]
+    tx.queries.insert_chunks(source_file_id, chunk_inserts)
 
 
 def hash_file(path: Path) -> str:
