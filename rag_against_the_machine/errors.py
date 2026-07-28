@@ -80,6 +80,29 @@ class FileProcessingError(Enum):
     CHUNK_FAILED = auto()
 
 
+class InotifyError(Enum):
+    INITIALIZATION_FAILED = auto()
+    WATCH_ADD_FAILED = auto()
+    WATCH_REMOVE_FAILED = auto()
+    READ_FAILED = auto()
+    POLL_FAILED = auto()
+    INSTANCE_CLOSED = auto()
+    MALFORMED_EVENT_BUFFER = auto()
+
+
+class WatchError(Enum):
+    ROOT_DOES_NOT_EXIST = auto()
+    ROOT_NOT_DIRECTORY = auto()
+    ROOT_NOT_READABLE = auto()
+    RECURSIVE_SCAN_FAILED = auto()
+    DIRECTORY_WATCH_FAILED = auto()
+    WATCH_LIMIT_REACHED = auto()
+    EVENT_QUEUE_OVERFLOW = auto()
+    EVENT_STREAM_FAILED = auto()
+    WATCHER_CLOSED = auto()
+    INTERNAL_STATE_INVALID = auto()
+
+
 E = TypeVar("E", bound=Enum)
 T = TypeVar("T")
 
