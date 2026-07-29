@@ -17,7 +17,6 @@ from rag_against_the_machine.models.source import (
     SourceFile,
 )
 
-
 _SUFFIX_TYPES: dict[str, FileType] = {
     ".py": "python",
     ".md": "markdown",
@@ -128,9 +127,7 @@ def discover_files(
             if not path.is_file():
                 continue
 
-            if any(
-                folder in _IGNORED_DIRECTORY_NAMES for folder in path.parts
-            ):
+            if any(folder in _IGNORED_DIRECTORY_NAMES for folder in path.parts):
                 continue
 
             file_type = _SUFFIX_TYPES.get(path.suffix.lower())

@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar, cast
 
-from rag_against_the_machine.errors import Option, Nothing, Some
-
+from rag_against_the_machine.errors import Nothing, Option, Some
 
 T = TypeVar("T")
 
@@ -253,7 +252,8 @@ class Store:
                 return result
 
 
-# normally i would use am embdded migrations dir to handle the db but with the scope of this projects its okay to just have the schma as a string
+# normally i would use am embdded migrations dir to handle the db but
+# with the scope of this projects its okay to just have the schma as a string
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS source_files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

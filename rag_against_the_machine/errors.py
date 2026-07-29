@@ -1,18 +1,19 @@
 """Shared result and error types for Python CLI and parsing utilities."""
 
 from __future__ import annotations
+
 from collections.abc import Callable
-from functools import wraps
 from dataclasses import dataclass
 from enum import Enum, auto
+from functools import wraps
 from typing import (
     Any,
     ClassVar,
     Generic,
     NoReturn,
+    ParamSpec,
     TypeAlias,
     TypeVar,
-    ParamSpec,
 )
 
 
@@ -91,16 +92,16 @@ class InotifyError(Enum):
 
 
 class WatchError(Enum):
-    ROOT_DOES_NOT_EXIST = auto()
+    ROOT_NOT_FOUND = auto()
     ROOT_NOT_DIRECTORY = auto()
     ROOT_NOT_READABLE = auto()
-    RECURSIVE_SCAN_FAILED = auto()
-    DIRECTORY_WATCH_FAILED = auto()
-    WATCH_LIMIT_REACHED = auto()
+    INITIAL_SCAN_FAILED = auto()
+    WATCH_REGISTRATION_FAILED = auto()
+    EVENT_READ_FAILED = auto()
     EVENT_QUEUE_OVERFLOW = auto()
-    EVENT_STREAM_FAILED = auto()
+    UNKNOWN_WATCH_DESCRIPTOR = auto()
     WATCHER_CLOSED = auto()
-    INTERNAL_STATE_INVALID = auto()
+    POLL_FAILED = auto()
 
 
 E = TypeVar("E", bound=Enum)
@@ -122,7 +123,7 @@ class Diagnostic:
 class BubbleUpError(Exception):
     """Internal exception to bubble Err results up to a catch_bubble decorator."""
 
-    def __init__(self, err_payload: "Err[Any]"):
+    def __init__(self, err_payload: Err[Any]):
         super().__init__(f"BubbleUpError: {err_payload.error}")
         self.err_payload = err_payload
 
@@ -168,9 +169,7 @@ class Err(Generic[E]):
     def unwrap(self) -> NoReturn:
         """Panics and prints the diagnostic error context."""
         self.print_diagnostic()
-        raise ValueError(
-            f"Called `Result::unwrap()` on an `Err` value: {self.error.name}"
-        )
+        raise ValueError(f"Called `Result::unwrap()` on an `Err` value: {self.error.name}")
 
     def print_diagnostic(self) -> None:
         """Prints a diagnostic message with dynamic caret alignment."""
@@ -194,9 +193,7 @@ class Err(Generic[E]):
 
         if not self.diagnostic:
             print(f" {RED}×{RESET} {BOLD}Operation failed{RESET}")
-            print(
-                f"   {RED}╰─▶{RESET} {err_name_str.replace('_', ' ').title()}"
-            )
+            print(f"   {RED}╰─▶{RESET} {err_name_str.replace('_', ' ').title()}")
             return
 
         d = self.diagnostic

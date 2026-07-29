@@ -9,7 +9,15 @@ import struct
 from dataclasses import dataclass
 from pathlib import Path
 
-from rag_against_the_machine.errors import Err, InotifyError, Ok, Result
+from rag_against_the_machine.errors import (
+    Err,
+    InotifyError,
+    Nothing,
+    Ok,
+    Option,
+    Result,
+    Some,
+)
 
 libc = ctypes.CDLL(None, use_errno=True)
 
@@ -23,6 +31,8 @@ libc.inotify_add_watch.argtypes = [
 libc.inotify_add_watch.restype = ctypes.c_int
 libc.inotify_rm_watch.argtypes = [ctypes.c_int, ctypes.c_int]
 libc.inotify_rm_watch.restype = ctypes.c_int
+
+_NO_PATH: Option[Path] = Nothing()
 
 IN_ACCESS = 0x00000001
 IN_MODIFY = 0x00000002
@@ -71,16 +81,15 @@ def _errno_err(
     error: InotifyError,
     operation: str,
     *,
-    path: Path | None = None,
+    path: Option[Path] = _NO_PATH,
 ) -> Err[InotifyError]:
     """Build a categorized backend error without raising an OSError."""
     error_number = ctypes.get_errno()
-    path_suffix = f" for {path}" if path is not None else ""
+    path_suffix = f" for {path.value}" if isinstance(path, Some) else ""
     return Err(
         error,
         context_msg=(
-            f"{operation}{path_suffix} failed: "
-            f"[errno {error_number}] {os.strerror(error_number)}"
+            f"{operation}{path_suffix} failed: [errno {error_number}] {os.strerror(error_number)}"
         ),
         namespace="inotify",
     )
@@ -106,9 +115,7 @@ class Inotify:
         flags = os.O_NONBLOCK | os.O_CLOEXEC
         fd = libc.inotify_init1(flags)
         if fd == -1:
-            return _errno_err(
-                InotifyError.INITIALIZATION_FAILED, "inotify_init1"
-            )
+            return _errno_err(InotifyError.INITIALIZATION_FAILED, "inotify_init1")
         return Ok(cls(fd))
 
     def add_watch(
@@ -134,21 +141,17 @@ class Inotify:
             return _errno_err(
                 InotifyError.WATCH_ADD_FAILED,
                 "inotify_add_watch",
-                path=normalized_path,
+                path=Some(normalized_path),
             )
         return Ok(watch_descriptor)
 
-    def remove_watch(
-        self, watch_descriptor: int
-    ) -> Result[None, InotifyError]:
+    def remove_watch(self, watch_descriptor: int) -> Result[None, InotifyError]:
         if self._closed:
             return _closed_err("remove a watch")
 
         result = libc.inotify_rm_watch(self.fd, watch_descriptor)
         if result == -1:
-            return _errno_err(
-                InotifyError.WATCH_REMOVE_FAILED, "inotify_rm_watch"
-            )
+            return _errno_err(InotifyError.WATCH_REMOVE_FAILED, "inotify_rm_watch")
         return Ok(None)
 
     def read(self) -> Result[list[RawEvent], InotifyError]:
@@ -176,9 +179,7 @@ class Inotify:
                     namespace="inotify",
                 )
 
-            wd, mask, cookie, name_length = _EVENT_HEADER.unpack_from(
-                data, offset
-            )
+            wd, mask, cookie, name_length = _EVENT_HEADER.unpack_from(data, offset)
             offset += _EVENT_HEADER.size
             if name_length > len(data) - offset:
                 return Err(
@@ -203,18 +204,14 @@ class Inotify:
 
         return Ok(events)
 
-    def poll(
-        self, timeout: int = -1
-    ) -> Result[list[tuple[int, int]], InotifyError]:
+    def poll(self, timeout: int = -1) -> Result[list[tuple[int, int]], InotifyError]:
         """Wait for readiness, returning poll records rather than raising."""
         if self._closed:
             return _closed_err("poll")
 
         poller = select.poll()
         try:
-            poller.register(
-                self.fd, select.POLLIN | select.POLLERR | select.POLLHUP
-            )
+            poller.register(self.fd, select.POLLIN | select.POLLERR | select.POLLHUP)
             return Ok(poller.poll(timeout))
         except InterruptedError:
             return Ok([])

@@ -22,13 +22,11 @@ from rag_against_the_machine.indexing.chunker import chunk_source_file
 from rag_against_the_machine.indexing.reader import read_source_file
 from rag_against_the_machine.models.chunk import Chunk
 from rag_against_the_machine.models.source import SourceFile
-
 from rag_against_the_machine.storage.db import (
     ChunkInsert,
     Store,
     Transaction,
 )
-
 
 _CURRENT_CHUNKER_VERSION = 1
 _MAX_FILES_PER_TRANSACTION = 25
@@ -84,8 +82,7 @@ async def run_pipeline(
         await file_queue.put(None)
 
     worker_tasks = [
-        asyncio.create_task(worker(file_queue, max_chunk_size))
-        for _ in range(worker_count)
+        asyncio.create_task(worker(file_queue, max_chunk_size)) for _ in range(worker_count)
     ]
 
     try:

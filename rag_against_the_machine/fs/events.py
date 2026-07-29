@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
 
+from rag_against_the_machine.errors import Nothing, Option, Some
+
 
 class EventKind(Enum):
     CREATED = auto()
@@ -18,7 +20,7 @@ class FileEvent:
     kind: EventKind
     path: Path
     is_directory: bool = False
-    old_path: Path | None = None
+    old_path: Option[Path] = Nothing()
 
     @classmethod
     def renamed(
@@ -30,7 +32,7 @@ class FileEvent:
     ) -> FileEvent:
         return cls(
             kind=EventKind.RENAMED,
-            old_path=old_path,
+            old_path=Some(old_path),
             path=new_path,
             is_directory=is_directory,
         )

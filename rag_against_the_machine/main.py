@@ -4,11 +4,6 @@ import sys
 from dataclasses import dataclass, field
 from os.path import basename
 
-from rag_against_the_machine.indexing.chunker import (
-    chunk_source_file,
-    validate_chunks,
-)
-
 from .cli_fw import Command
 from .errors import Err
 
@@ -17,9 +12,7 @@ from .errors import Err
 class ServeOptions:
     """Document the options accepted by the development server command."""
 
-    port: int = field(
-        default=8000, metadata={"help": "Port for the local API server."}
-    )
+    port: int = field(default=8000, metadata={"help": "Port for the local API server."})
 
 
 def tmp() -> None:
@@ -73,10 +66,7 @@ async def _tmp() -> None:
         return
 
     output = pipeline_result.unwrap()
-    print(
-        f"Indexed {output.files_processed} files; "
-        f"skipped {output.files_skipped}."
-    )
+    print(f"Indexed {output.files_processed} files; skipped {output.files_skipped}.")
     for diagnostic in output.diagnostics:
         print(f"warning: {diagnostic.filename}: {diagnostic.help_msg}")
     # print(output)
