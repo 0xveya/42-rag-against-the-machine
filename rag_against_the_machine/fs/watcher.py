@@ -1,3 +1,5 @@
+"""Synchronous frontend for normalized inotify events."""
+
 from __future__ import annotations
 
 import select
@@ -16,11 +18,14 @@ from rag_against_the_machine.fs.inotify import Inotify
 
 
 class Watcher:
+    """Poll and deliver normalized filesystem events synchronously."""
+
     def __init__(
         self,
         backend: Inotify,
         coordinator: WatchCoordinator,
     ) -> None:
+        """Create a watcher around an initialized backend and coordinator."""
         self._backend = backend
         self._coordinator = coordinator
         self._pending: deque[FileEvent] = deque()
@@ -40,6 +45,11 @@ class Watcher:
         recursive: bool = True,
         follow_symlinks: bool = False,
     ) -> Result[Watcher, WatchError]:
+        """Create and initialize a synchronous watcher.
+
+        Returns:
+            An initialized watcher, or a watch registration error.
+        """
         backend_result = Inotify.open()
 
         if isinstance(backend_result, Err):
@@ -72,6 +82,11 @@ class Watcher:
         return Ok(cls(backend, coordinator))
 
     def recv(self) -> Result[FileEvent, WatchError]:
+        """Block until one normalized event or watch error is available.
+
+        Returns:
+            A normalized event, or a categorized watch error.
+        """
         if self._pending:
             return Ok(self._pending.popleft())
 
@@ -133,6 +148,7 @@ class Watcher:
                 return Ok(self._pending.popleft())
 
     def __iter__(self) -> Iterator[Result[FileEvent, WatchError]]:
+        """Yield normalized results until closure or the first error."""
         while not self._closed:
             result = self.recv()
             yield result
@@ -140,6 +156,7 @@ class Watcher:
                 return
 
     def close(self) -> None:
+        """Unregister polling and close the backend idempotently."""
         if self._closed:
             return
 
@@ -152,7 +169,9 @@ class Watcher:
         self._backend.close()
 
     def __enter__(self) -> Watcher:
+        """Return this watcher for synchronous context management."""
         return self
 
     def __exit__(self, *_: object) -> None:
+        """Close the watcher when leaving its context."""
         self.close()

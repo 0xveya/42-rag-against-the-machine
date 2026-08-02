@@ -29,10 +29,16 @@ exclude = ["tests*"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+preview = true
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
-ignore = ["UP046", "ISC001"]
+select = ["E", "F", "I", "UP", "B", "D", "DOC"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D", "DOC"]
 
 [tool.ruff.format]
 quote-style = "double"

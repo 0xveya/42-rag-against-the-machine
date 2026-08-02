@@ -17,12 +17,19 @@ def create_app() -> FastAPI:
     """Create the unconfigured API application.
 
     Search and answer routes will be attached when RagService is implemented.
+
+    Returns:
+        The configured FastAPI application.
     """
     app = FastAPI(title="rag-against-the-machine")
 
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
-        """Report that the scaffold server is running."""
+        """Report that the scaffold server is running.
+
+        Returns:
+            A healthy status response.
+        """
         return HealthResponse()
 
     return app

@@ -11,6 +11,8 @@ from rag_against_the_machine.models.source import SourceFile
 
 
 class MarkdownBlockType(Enum):
+    """Identify structural Markdown block categories."""
+
     HEADING = auto()
     PARAGRAPH = auto()
     CODE_FENCE = auto()
@@ -39,8 +41,11 @@ def chunk_source_file(
     text: str,
     max_chunk_size: int,
 ) -> Result[list[Chunk], ChunkingError]:
-    """Route a source file to the appropriate chunking strategy."""
+    """Route a source file to the appropriate chunking strategy.
 
+    Returns:
+        Generated chunks, or a categorized chunking error.
+    """
     if max_chunk_size <= 0:
         return Err(ChunkingError.INVALID_MAX_CHUNK_SIZE)
 
@@ -71,8 +76,14 @@ def make_chunk(
     start: int,
     end: int,
 ) -> Chunk:
-    """Construct a chunk while preserving exact source offsets."""
+    """Construct a chunk while preserving exact source offsets.
 
+    Returns:
+        A chunk covering the requested source range.
+
+    Raises:
+        ValueError: If the source range is invalid.
+    """
     if start < 0:
         raise ValueError("Chunk start cannot be negative")
 
@@ -96,8 +107,7 @@ def find_preferred_split(
     start: int,
     maximum_end: int,
 ) -> int:
-    """
-    Find a pleasant split point before maximum_end.
+    """Find a pleasant split point before maximum_end.
 
     Preference order:
 
@@ -105,8 +115,10 @@ def find_preferred_split(
     2. Newline
     3. Space
     4. Hard maximum
-    """
 
+    Returns:
+        The preferred exclusive split position.
+    """
     separators = (
         "\n\n",
         "\n",
@@ -135,13 +147,17 @@ def split_range(
     end: int,
     max_chunk_size: int,
 ) -> list[Chunk]:
-    """
-    Split one source range into chunks.
+    """Split one source range into chunks.
 
     This is the fallback used when a Markdown block, Python definition,
     or plain-text file is larger than max_chunk_size.
-    """
 
+    Returns:
+        Chunks that exactly cover the requested range.
+
+    Raises:
+        ValueError: If the maximum size or source range is invalid.
+    """
     if max_chunk_size <= 0:
         raise ValueError("max_chunk_size must be greater than zero")
 
@@ -192,7 +208,6 @@ def append_range_as_chunks(
     max_chunk_size: int,
 ) -> None:
     """Append one range, splitting it only when necessary."""
-
     if start >= end:
         return
 
@@ -223,8 +238,11 @@ def chunk_plain_text(
     text: str,
     max_chunk_size: int,
 ) -> Result[list[Chunk], ChunkingError]:
-    """Chunk plain text using paragraph, line, and space boundaries."""
+    """Chunk plain text using paragraph, line, and space boundaries.
 
+    Returns:
+        Generated chunks, or an invalid-size error.
+    """
     if max_chunk_size <= 0:
         return Err(ChunkingError.INVALID_MAX_CHUNK_SIZE)
 
@@ -240,12 +258,13 @@ def chunk_plain_text(
 
 
 def find_markdown_blocks(text: str) -> list[MarkdownBlock]:
-    """
-    Find Markdown headings, paragraphs, and fenced code blocks.
+    """Find Markdown headings, paragraphs, and fenced code blocks.
 
     Fenced code blocks are returned as one atomic block whenever possible.
-    """
 
+    Returns:
+        Ordered structural blocks covering the Markdown text.
+    """
     lines = text.splitlines(keepends=True)
 
     blocks: list[MarkdownBlock] = []
@@ -293,7 +312,11 @@ def find_markdown_blocks(text: str) -> list[MarkdownBlock]:
             fence_marker = opening_marker
             block_start = position
 
-        elif inside_fence and fence_marker is not None and stripped.startswith(fence_marker):
+        elif (
+            inside_fence
+            and fence_marker is not None
+            and stripped.startswith(fence_marker)
+        ):
             append_block(
                 start=block_start,
                 end=line_end,
@@ -330,7 +353,11 @@ def find_markdown_blocks(text: str) -> list[MarkdownBlock]:
 
         position = line_end
 
-    final_block_type = MarkdownBlockType.CODE_FENCE if inside_fence else MarkdownBlockType.PARAGRAPH
+    final_block_type = (
+        MarkdownBlockType.CODE_FENCE
+        if inside_fence
+        else MarkdownBlockType.PARAGRAPH
+    )
 
     append_block(
         start=block_start,
@@ -350,7 +377,6 @@ def flush_pending_range(
     max_chunk_size: int,
 ) -> None:
     """Append a pending combined range when one exists."""
-
     if start is None or end is None:
         return
 
@@ -369,12 +395,13 @@ def chunk_markdown(
     text: str,
     max_chunk_size: int,
 ) -> Result[list[Chunk], ChunkingError]:
-    """
-    Chunk Markdown around structural blocks.
+    """Chunk Markdown around structural blocks.
 
     Code fences remain intact unless a single fence exceeds max_chunk_size.
-    """
 
+    Returns:
+        Generated chunks, or an invalid-size error.
+    """
     if max_chunk_size <= 0:
         return Err(ChunkingError.INVALID_MAX_CHUNK_SIZE)
 
@@ -447,13 +474,14 @@ def chunk_markdown(
 
 
 def build_line_offsets(text: str) -> list[int]:
-    """
-    Map zero-based line indexes to absolute character offsets.
+    """Map zero-based line indexes to absolute character offsets.
 
     offsets[0] is the beginning of line 1.
     offsets[1] is the beginning of line 2.
-    """
 
+    Returns:
+        Absolute offsets for every line boundary.
+    """
     offsets = [0]
 
     for line in text.splitlines(keepends=True):
@@ -465,8 +493,11 @@ def build_line_offsets(text: str) -> list[int]:
 def get_python_node_start_line(
     node: ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef,
 ) -> int:
-    """Include decorators in a Python definition's range."""
+    """Include decorators in a Python definition's range.
 
+    Returns:
+        The one-based first line of the decorated definition.
+    """
     start_line = node.lineno
 
     if node.decorator_list:
@@ -478,12 +509,13 @@ def get_python_node_start_line(
 def find_python_structural_ranges(
     text: str,
 ) -> list[tuple[int, int]]:
-    """
-    Find top-level Python functions and classes.
+    """Find top-level Python functions and classes.
 
     The returned end indexes are exclusive.
-    """
 
+    Returns:
+        Character ranges for top-level definitions.
+    """
     tree = ast.parse(text)
     line_offsets = build_line_offsets(text)
 
@@ -510,18 +542,18 @@ def include_range_gaps(
     ranges: list[tuple[int, int]],
     text_length: int,
 ) -> list[tuple[int, int]]:
-    """
-    Add ranges for imports, constants, comments, and module-level code.
+    """Add ranges for imports, constants, comments, and module-level code.
 
     Example:
-
         [(100, 200), (300, 400)]
 
     becomes:
 
         [(0, 100), (100, 200), (200, 300), (300, 400), ...]
-    """
 
+    Returns:
+        Sorted, nonempty ranges covering gaps and definitions.
+    """
     complete_ranges: list[tuple[int, int]] = []
     current = 0
 
@@ -543,13 +575,14 @@ def chunk_python(
     text: str,
     max_chunk_size: int,
 ) -> Result[list[Chunk], ChunkingError]:
-    """
-    Chunk Python using top-level function and class boundaries.
+    """Chunk Python using top-level function and class boundaries.
 
     Invalid Python falls back to plain-text chunking. Oversized definitions
     are split using blank lines, then line endings, then spaces.
-    """
 
+    Returns:
+        Generated chunks, or an invalid-size error.
+    """
     if max_chunk_size <= 0:
         return Err(ChunkingError.INVALID_MAX_CHUNK_SIZE)
 
@@ -587,8 +620,15 @@ def validate_chunks(
     chunks: list[Chunk],
     max_chunk_size: int,
 ) -> None:
+    """Validate chunk bounds, coverage, size, and stored text.
+
+    Raises:
+        ValueError: If any chunk invariant is violated.
+    """
     if max_chunk_size <= 0:
-        raise ValueError(f"max_chunk_size must be positive, got {max_chunk_size}")
+        raise ValueError(
+            f"max_chunk_size must be positive, got {max_chunk_size}"
+        )
 
     previous_end = 0
 
@@ -598,16 +638,24 @@ def validate_chunks(
         chunk_size = end - start
 
         if start != previous_end:
-            raise ValueError(f"Chunk {index}: expected start {previous_end}, got {start}")
+            raise ValueError(
+                f"Chunk {index}: expected start {previous_end}, got {start}"
+            )
 
         if start < 0:
-            raise ValueError(f"Chunk {index}: start cannot be negative: {start}")
+            raise ValueError(
+                f"Chunk {index}: start cannot be negative: {start}"
+            )
 
         if end < start:
-            raise ValueError(f"Chunk {index}: end {end} is before start {start}")
+            raise ValueError(
+                f"Chunk {index}: end {end} is before start {start}"
+            )
 
         if end > len(text):
-            raise ValueError(f"Chunk {index}: end {end} exceeds source length {len(text)}")
+            raise ValueError(
+                f"Chunk {index}: end {end} exceeds source length {len(text)}"
+            )
 
         if chunk_size <= 0:
             raise ValueError(f"Chunk {index}: invalid size {chunk_size}")

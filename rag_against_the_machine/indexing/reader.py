@@ -8,7 +8,11 @@ from rag_against_the_machine.models.source import SourceFile
 
 
 def _file_diagnostic(source_file: SourceFile, help_msg: str) -> Diagnostic:
-    """Describe a source-file failure using a complete diagnostic location."""
+    """Describe a source-file failure using a complete diagnostic location.
+
+    Returns:
+        A diagnostic spanning the stored source path.
+    """
     filename = source_file.stored_path
     return Diagnostic(
         filename=filename,
@@ -23,7 +27,11 @@ def _file_diagnostic(source_file: SourceFile, help_msg: str) -> Diagnostic:
 def read_source_file(
     source_file: SourceFile,
 ) -> Result[str, ReadError]:
-    """Read a discovered source file as UTF-8 text."""
+    """Read a discovered source file as UTF-8 text.
+
+    Returns:
+        Decoded text, or a categorized read error.
+    """
     path = source_file.absolute_path
 
     try:

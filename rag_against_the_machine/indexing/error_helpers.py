@@ -12,7 +12,11 @@ def make_discovery_error(
     error: DiscoveryError,
     diag: Diagnostic,
 ) -> Err[DiscoveryError]:
-    """Create a consistently formatted discovery error."""
+    """Create a consistently formatted discovery error.
+
+    Returns:
+        A categorized discovery error with diagnostic context.
+    """
     return Err(
         error=error,
         diagnostic=diag,
@@ -25,7 +29,11 @@ def make_read_error(
     error: ReadError,
     diag: Diagnostic,
 ) -> Err[ReadError]:
-    """Create a consistently formatted source-file reading error."""
+    """Create a consistently formatted source-file reading error.
+
+    Returns:
+        A categorized read error with diagnostic context.
+    """
     return Err(
         error=error,
         diagnostic=diag,

@@ -36,7 +36,11 @@ _IGNORED_DIRECTORY_NAMES = {
 
 
 def _path_diagnostic(filename: str, help_msg: str) -> Diagnostic:
-    """Describe a path failure using a complete diagnostic location."""
+    """Describe a path failure using a complete diagnostic location.
+
+    Returns:
+        A diagnostic spanning the supplied path.
+    """
     return Diagnostic(
         filename=filename,
         line_num=1,

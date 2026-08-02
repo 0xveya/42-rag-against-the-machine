@@ -67,6 +67,8 @@ _EVENT_HEADER = struct.Struct("iIII")
 
 @dataclass(frozen=True)
 class RawEvent:
+    """Represent one event decoded directly from the kernel buffer."""
+
     watch_descriptor: int
     mask: int
     cookie: int
@@ -74,6 +76,7 @@ class RawEvent:
 
     @property
     def is_directory(self) -> bool:
+        """Whether the kernel marked the event target as a directory."""
         return bool(self.mask & IN_ISDIR)
 
 
@@ -83,7 +86,11 @@ def _errno_err(
     *,
     path: Option[Path] = _NO_PATH,
 ) -> Err[InotifyError]:
-    """Build a categorized backend error without raising an OSError."""
+    """Build a categorized backend error without raising an OSError.
+
+    Returns:
+        An error containing the current C errno and operation context.
+    """
     error_number = ctypes.get_errno()
     path_suffix = f" for {path.value}" if isinstance(path, Some) else ""
     return Err(
@@ -107,11 +114,17 @@ class Inotify:
     """One inotify instance; directory recursion belongs to a higher layer."""
 
     def __init__(self, fd: int) -> None:
+        """Wrap an initialized inotify file descriptor."""
         self.fd = fd
         self._closed = False
 
     @classmethod
     def open(cls) -> Result[Inotify, InotifyError]:
+        """Create a nonblocking close-on-exec inotify instance.
+
+        Returns:
+            A backend instance, or an initialization error.
+        """
         flags = os.O_NONBLOCK | os.O_CLOEXEC
         fd = libc.inotify_init1(flags)
         if fd == -1:
@@ -123,6 +136,11 @@ class Inotify:
         path: str | os.PathLike[str],
         mask: int = DEFAULT_MASK,
     ) -> Result[int, InotifyError]:
+        """Register ``path`` with the requested event mask.
+
+        Returns:
+            The kernel watch descriptor, or a categorized backend error.
+        """
         if self._closed:
             return _closed_err("add a watch")
 
@@ -146,6 +164,11 @@ class Inotify:
         return Ok(watch_descriptor)
 
     def remove_watch(self, watch_descriptor: int) -> Result[None, InotifyError]:
+        """Remove a kernel watch descriptor.
+
+        Returns:
+            Success, or a categorized backend error.
+        """
         if self._closed:
             return _closed_err("remove a watch")
 
@@ -155,6 +178,11 @@ class Inotify:
         return Ok(None)
 
     def read(self) -> Result[list[RawEvent], InotifyError]:
+        """Decode all currently readable kernel events without blocking.
+
+        Returns:
+            Decoded raw events, or a read or buffer error.
+        """
         if self._closed:
             return _closed_err("read")
 
@@ -205,7 +233,11 @@ class Inotify:
         return Ok(events)
 
     def poll(self, timeout: int = -1) -> Result[list[tuple[int, int]], InotifyError]:
-        """Wait for readiness, returning poll records rather than raising."""
+        """Wait for readiness, returning poll records rather than raising.
+
+        Returns:
+            Poll records, or a categorized polling error.
+        """
         if self._closed:
             return _closed_err("poll")
 
@@ -219,6 +251,7 @@ class Inotify:
             return _errno_err(InotifyError.POLL_FAILED, "poll")
 
     def close(self) -> None:
+        """Close the file descriptor idempotently."""
         if self._closed:
             return
         self._closed = True
@@ -228,7 +261,9 @@ class Inotify:
             pass
 
     def __enter__(self) -> Inotify:
+        """Return this backend for synchronous context management."""
         return self
 
     def __exit__(self, *_: object) -> None:
+        """Close the backend when leaving its context."""
         self.close()

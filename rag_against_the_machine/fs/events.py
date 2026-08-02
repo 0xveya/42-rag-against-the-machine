@@ -1,3 +1,5 @@
+"""Normalized filesystem event types shared by watcher frontends."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -8,6 +10,8 @@ from rag_against_the_machine.errors import Nothing, Option, Some
 
 
 class EventKind(Enum):
+    """Identify the normalized kind of a filesystem change."""
+
     CREATED = auto()
     MODIFIED = auto()
     DELETED = auto()
@@ -17,6 +21,8 @@ class EventKind(Enum):
 
 @dataclass(frozen=True)
 class FileEvent:
+    """Describe one normalized filesystem change."""
+
     kind: EventKind
     path: Path
     is_directory: bool = False
@@ -30,6 +36,11 @@ class FileEvent:
         *,
         is_directory: bool,
     ) -> FileEvent:
+        """Create a normalized rename event.
+
+        Returns:
+            A rename event containing both old and new paths.
+        """
         return cls(
             kind=EventKind.RENAMED,
             old_path=Some(old_path),
