@@ -15,7 +15,11 @@ HelpRenderer = Callable[["Parser"], None]
 
 
 def CliErr(error: CliError, diagnostic: Diagnostic | None = None) -> Err[CliError]:
-    """Helper to automatically bake module defaults into every error."""
+    """Build a CLI error with module defaults.
+
+    Returns:
+        A categorized CLI error result.
+    """
     return Err(
         error=error,
         diagnostic=diagnostic,
@@ -31,7 +35,14 @@ def arg(
     default: Any = MISSING,
     default_factory: Any = MISSING,
 ) -> Any:
-    """Helper to define dataclass fields for CLI arguments without nested metadata dicts."""
+    """Define a dataclass field with CLI metadata.
+
+    Returns:
+        The configured dataclass field.
+
+    Raises:
+        ValueError: If both a default and default factory are supplied.
+    """
     metadata = {
         "help": help,
         "positional": positional,
@@ -236,7 +247,11 @@ class Parser:
         argv: list[str] | None = None,
         diagnostic_argv: list[str] | None = None,
     ) -> Result[dict[str, object], CliError]:
-        """Parse the command line arguments."""
+        """Parse command-line arguments.
+
+        Returns:
+            Parsed values, or a categorized CLI error.
+        """
         if argv is None:
             argv = sys.argv[1:]
 
@@ -449,6 +464,14 @@ class Parser:
         schema: type[Any],
         description: str = "",
     ) -> "Parser":
+        """Build a parser from a dataclass schema.
+
+        Returns:
+            A parser populated from the schema fields.
+
+        Raises:
+            TypeError: If ``schema`` is not a dataclass.
+        """
         if not is_dataclass(schema):
             raise TypeError("schema must be a dataclass")
 
@@ -463,6 +486,11 @@ class Parser:
         argv: list[str] | None = None,
         diagnostic_argv: list[str] | None = None,
     ) -> Result[T, CliError]:
+        """Parse arguments and instantiate a dataclass schema.
+
+        Returns:
+            The schema instance, or a categorized CLI error.
+        """
         result = self.parse(argv, diagnostic_argv)
 
         match result:
@@ -476,6 +504,7 @@ class Parser:
                 return Ok(instantiated)
 
     def help(self) -> None:
+        """Render help using the configured style or custom renderer."""
         if self.help_renderer is not None:
             self.help_renderer(self)
             return
@@ -570,6 +599,7 @@ class Command:
         schema: type[Any] | None = None,
         run: Callable[[Any], Any] | None = None,
     ):
+        """Create a command with optional schema and execution callback."""
         self.name = name
         self.short = short
         self.long = long
@@ -580,6 +610,11 @@ class Command:
         self.parent: Command | None = None
 
     def add_command(self, cmd: "Command") -> "Command":
+        """Attach and return a child command.
+
+        Returns:
+            The attached child command.
+        """
         cmd.parent = self
         self.commands[cmd.name] = cmd
         return cmd
@@ -603,7 +638,11 @@ class Command:
         argv: list[str] | None = None,
         diagnostic_argv: list[str] | None = None,
     ) -> Result[Any, CliError]:
-        """Parse arguments, resolve subcommand, instantiate schema, and execute it."""
+        """Resolve a command, parse its arguments, and execute it.
+
+        Returns:
+            The command result, or a categorized CLI error.
+        """
         if argv is None:
             argv = sys.argv[1:]
         if diagnostic_argv is None:
@@ -627,7 +666,7 @@ class Command:
                 if token.startswith("-"):
                     help_msg = f"Unknown argument: {token}"
                 else:
-                    best_match, distance = _find_best_string_match(token, target_cmd.commands)
+                    best_match, distance = _find_best_string_match(token, set(target_cmd.commands))
                     if best_match and distance is not None and distance <= 2:
                         help_msg = f"Unknown command: {token}. Did you mean '{best_match}'?"
                     else:
@@ -750,6 +789,8 @@ class Command:
 
 @dataclass
 class TestArgs:
+    """Provide an example schema for manual CLI testing."""
+
     name: str = field(metadata={"help": "Your name"})
 
     verbose: bool = field(
@@ -775,7 +816,7 @@ class TestArgs:
 
 
 def main() -> None:
-    """testing main dont use
+    """Testing main dont use.
 
     uv run python -m src.cli_fw \
         --name abc \
@@ -784,7 +825,6 @@ def main() -> None:
         --format json \
         --verbose
     """
-
     p = Parser.from_dataclass(
         TestArgs,
         description="My test CLI",
@@ -810,7 +850,11 @@ def main() -> None:
 
 
 def _levenshteinRecursive(str1: str, str2: str, len_str1: int, len_str2: int) -> int:
-    """Calculates the Levenshtein distance between two strings"""
+    """Calculate the Levenshtein distance between two string prefixes.
+
+    Returns:
+        The edit distance between the requested prefixes.
+    """
     s1 = str1[:len_str1]
     s2 = str2[:len_str2]
     m, n = len(s1), len(s2)
@@ -831,8 +875,7 @@ def _levenshteinRecursive(str1: str, str2: str, len_str1: int, len_str2: int) ->
 def _find_best_string_match(
     target: str, valid_choices: list[str] | set[str]
 ) -> tuple[str | None, int | None]:
-    """
-    Finds the closest string match using Levenshtein distance with tie-breaks
+    """Finds the closest string match using Levenshtein distance with tie-breaks.
 
     tie-breaking does those rules
     no
@@ -843,6 +886,9 @@ def _find_best_string_match(
     2. longer shared common prefix
     3. closer absolute string length differences
     4. lexicographical :nerdemoji: ahh word fallback
+
+    Returns:
+        The closest choice and distance, or two absent values when empty.
     """
     if not valid_choices:
         return None, None

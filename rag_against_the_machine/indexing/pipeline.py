@@ -17,6 +17,8 @@ from rag_against_the_machine.errors import (
     Ok,
     PipelineError,
     Result,
+    StorageError,
+    catch_bubble,
 )
 from rag_against_the_machine.indexing.chunker import chunk_source_file
 from rag_against_the_machine.indexing.reader import read_source_file
@@ -34,6 +36,8 @@ _MAX_FILES_PER_TRANSACTION = 25
 
 @dataclass(frozen=True, slots=True)
 class ProcessedFile:
+    """Store one successfully chunked file and its persistence metadata."""
+
     source_file: SourceFile
     size_bytes: int
     modified_at_ns: int
@@ -46,6 +50,8 @@ class ProcessedFile:
 
 @dataclass(slots=True)
 class WorkerOutput:
+    """Collect successful files and diagnostics from one worker."""
+
     processed_files: list[ProcessedFile]
     diagnostics: list[Diagnostic]
     files_processed: int
@@ -54,6 +60,8 @@ class WorkerOutput:
 
 @dataclass(slots=True)
 class PipelineOutput:
+    """Summarize indexing work returned to the caller."""
+
     diagnostics: list[Diagnostic]
     files_discovered: int
     files_processed: int
@@ -65,6 +73,11 @@ async def run_pipeline(
     max_chunk_size: int,
     store: Store,
 ) -> Result[PipelineOutput, PipelineError]:
+    """Process and persist discovered source files concurrently.
+
+    Returns:
+        A pipeline summary, or a categorized pipeline error.
+    """
     if not source_files:
         return Err(PipelineError.EMPTY_INPUT)
 
@@ -128,11 +141,17 @@ async def run_pipeline(
         batch_size = persistence_batch_size(len(processed_files))
         for batch_start in range(0, len(processed_files), batch_size):
             batch = processed_files[batch_start : batch_start + batch_size]
-            await asyncio.to_thread(
+            persist_result = await asyncio.to_thread(
                 persist_processed_files,
                 store,
                 batch,
             )
+            if isinstance(persist_result, Err):
+                return Err(
+                    PipelineError.DATABASE_FAILED,
+                    context_msg=persist_result.context_msg,
+                    namespace="indexing::pipeline",
+                )
             files_persisted += len(batch)
 
     except asyncio.CancelledError:
@@ -155,6 +174,11 @@ async def worker(
     file_queue: asyncio.Queue[SourceFile | None],
     max_chunk_size: int,
 ) -> WorkerOutput:
+    """Consume source files until the queue sentinel is received.
+
+    Returns:
+        Files and diagnostics accumulated by this worker.
+    """
     processed_files: list[ProcessedFile] = []
     diagnostics: list[Diagnostic] = []
     files_processed = 0
@@ -195,6 +219,11 @@ async def read_and_chunk(
     source_file: SourceFile,
     max_chunk_size: int,
 ) -> Result[ProcessedFile, FileProcessingError]:
+    """Read, chunk, hash, and describe one source file.
+
+    Returns:
+        The processed file, or a categorized processing error.
+    """
     read_result = await asyncio.to_thread(
         read_source_file,
         source_file,
@@ -286,7 +315,11 @@ async def read_and_chunk(
 
 
 def persistence_batch_size(file_count: int) -> int:
-    """Choose a bounded batch size from the number of files to persist."""
+    """Choose a bounded batch size from the number of files to persist.
+
+    Returns:
+        A positive number of files per transaction.
+    """
     if file_count <= 0:
         return 1
 
@@ -300,21 +333,32 @@ def persistence_batch_size(file_count: int) -> int:
 def persist_processed_files(
     store: Store,
     processed_files: list[ProcessedFile],
-) -> None:
-    """Persist one bounded batch and commit it as a single transaction."""
+) -> Result[None, StorageError]:
+    """Persist one bounded batch and commit it as a single transaction.
 
-    def operation(tx: Transaction) -> None:
+    Returns:
+        Success, or a categorized storage error.
+    """
+
+    @catch_bubble
+    def operation(tx: Transaction) -> Result[None, StorageError]:
         for processed in processed_files:
-            persist_processed_file(tx, processed)
+            _ = persist_processed_file(tx, processed).q
+        return Ok(None)
 
-    store.with_tx(operation)
+    return store.with_tx(operation)
 
 
+@catch_bubble
 def persist_processed_file(
     tx: Transaction,
     processed: ProcessedFile,
-) -> None:
-    """Write one file using an already-open transaction."""
+) -> Result[None, StorageError]:
+    """Write one file using an already-open transaction.
+
+    Returns:
+        Success, or a categorized storage error.
+    """
     source_file_id = tx.queries.upsert_source_file(
         path=processed.source_file.stored_path,
         file_type=processed.source_file.file_type,
@@ -324,9 +368,9 @@ def persist_processed_file(
         max_chunk_size=processed.max_chunk_size,
         chunker_version=processed.chunker_version,
         indexed_at_ns=processed.indexed_at_ns,
-    ).expect("Source-file upsert did not return an id")
+    ).q
 
-    tx.queries.delete_chunks_for_source(source_file_id)
+    _ = tx.queries.delete_chunks_for_source(source_file_id).q
 
     created_at_ns = time.time_ns()
     chunk_inserts = [
@@ -339,10 +383,16 @@ def persist_processed_file(
         )
         for chunk_index, chunk in enumerate(processed.chunks)
     ]
-    tx.queries.insert_chunks(source_file_id, chunk_inserts)
+    _ = tx.queries.insert_chunks(source_file_id, chunk_inserts).q
+    return Ok(None)
 
 
 def hash_file(path: Path) -> str:
+    """Calculate a source file's SHA-256 digest.
+
+    Returns:
+        The lowercase hexadecimal digest.
+    """
     hasher = hashlib.sha256()
 
     with path.open("rb") as file:

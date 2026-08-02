@@ -40,6 +40,8 @@ class DiscoveryError(Enum):
 
 
 class ReadError(Enum):
+    """Enumerate source-file reading failures."""
+
     FILE_NOT_FOUND = auto()
     FILE_NOT_READABLE = auto()
     FILE_IS_DIRECTORY = auto()
@@ -48,6 +50,8 @@ class ReadError(Enum):
 
 
 class ChunkingError(Enum):
+    """Enumerate source-text chunking failures."""
+
     INVALID_MAX_CHUNK_SIZE = auto()
     PYTHON_PARSE_FAILED = auto()
     MARKDOWN_PARSE_FAILED = auto()
@@ -57,11 +61,15 @@ class ChunkingError(Enum):
 
 
 class IndexingError(Enum):
+    """Enumerate index persistence failures."""
+
     INDEX_WRITE_FAILED = auto()
     INDEX_SAVE_FAILED = auto()
 
 
 class PipelineError(Enum):
+    """Enumerate asynchronous indexing pipeline failures."""
+
     DISCOVERY_FAILED = auto()
     TASK_FAILED = auto()
     DATABASE_FAILED = auto()
@@ -70,6 +78,8 @@ class PipelineError(Enum):
 
 
 class FileProcessingStage(Enum):
+    """Identify a stage of source-file processing."""
+
     READ = auto()
     CHUNK = auto()
 
@@ -82,6 +92,8 @@ class FileProcessingError(Enum):
 
 
 class InotifyError(Enum):
+    """Enumerate low-level inotify backend failures."""
+
     INITIALIZATION_FAILED = auto()
     WATCH_ADD_FAILED = auto()
     WATCH_REMOVE_FAILED = auto()
@@ -92,16 +104,40 @@ class InotifyError(Enum):
 
 
 class WatchError(Enum):
+    """Enumerate normalized watcher frontend failures."""
+
     ROOT_NOT_FOUND = auto()
     ROOT_NOT_DIRECTORY = auto()
     ROOT_NOT_READABLE = auto()
+
     INITIAL_SCAN_FAILED = auto()
     WATCH_REGISTRATION_FAILED = auto()
+
     EVENT_READ_FAILED = auto()
     EVENT_QUEUE_OVERFLOW = auto()
     UNKNOWN_WATCH_DESCRIPTOR = auto()
+
+    WATCHER_NOT_STARTED = auto()
     WATCHER_CLOSED = auto()
+
+    EVENT_LOOP_UNAVAILABLE = auto()
+    EVENT_LOOP_REGISTRATION_FAILED = auto()
+
+    RECEIVE_TIMEOUT = auto()
+    PUBLIC_QUEUE_FULL = auto()
+
     POLL_FAILED = auto()
+
+
+class StorageError(Enum):
+    """Enumerate failures exposed by the SQLite storage API."""
+
+    DIRECTORY_CREATION_FAILED = auto()
+    CONNECTION_FAILED = auto()
+    QUERY_FAILED = auto()
+    INVALID_QUERY_RESULT = auto()
+    TRANSACTION_FAILED = auto()
+    OPERATION_FAILED = auto()
 
 
 E = TypeVar("E", bound=Enum)
@@ -124,12 +160,17 @@ class BubbleUpError(Exception):
     """Internal exception to bubble Err results up to a catch_bubble decorator."""
 
     def __init__(self, err_payload: Err[Any]):
+        """Store the error being propagated."""
         super().__init__(f"BubbleUpError: {err_payload.error}")
         self.err_payload = err_payload
 
 
 def catch_bubble(func: Callable[..., Any]) -> Callable[..., Any]:
-    """Decorator to catch bubbled errors and return them cleanly as an Err."""
+    """Decorate a function to convert bubbled errors into return values.
+
+    Returns:
+        A wrapper that catches and returns bubbled error payloads.
+    """
 
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         try:
@@ -167,9 +208,15 @@ class Err(Generic[E]):
     namespace: str | None = None
 
     def unwrap(self) -> NoReturn:
-        """Panics and prints the diagnostic error context."""
+        """Print diagnostic context and reject unwrapping an error.
+
+        Raises:
+            ValueError: Always, because an error has no success value.
+        """
         self.print_diagnostic()
-        raise ValueError(f"Called `Result::unwrap()` on an `Err` value: {self.error.name}")
+        raise ValueError(
+            f"Called `Result::unwrap()` on an `Err` value: {self.error.name}"
+        )
 
     def print_diagnostic(self) -> None:
         """Prints a diagnostic message with dynamic caret alignment."""
@@ -193,7 +240,9 @@ class Err(Generic[E]):
 
         if not self.diagnostic:
             print(f" {RED}×{RESET} {BOLD}Operation failed{RESET}")
-            print(f"   {RED}╰─▶{RESET} {err_name_str.replace('_', ' ').title()}")
+            print(
+                f"   {RED}╰─▶{RESET} {err_name_str.replace('_', ' ').title()}"
+            )
             return
 
         d = self.diagnostic
@@ -222,7 +271,11 @@ class Err(Generic[E]):
 
     @property
     def q(self) -> NoReturn:
-        """Rust-like ? operator. Raises BubbleUpError to bubble the Err up."""
+        """Propagate this error to a ``catch_bubble`` wrapper.
+
+        Raises:
+            BubbleUpError: Always, carrying this error result.
+        """
         raise BubbleUpError(self)
 
 
@@ -237,6 +290,7 @@ class BubbleUpNothing(Exception):
     nothing: Nothing
 
     def __init__(self, nothing: Nothing) -> None:
+        """Store the absent option being propagated."""
         super().__init__("Attempted to bubble up Nothing")
         self.nothing = nothing
 
@@ -261,7 +315,7 @@ class Some(Generic[T]):
 
     @property
     def q(self) -> T:
-        """Return the value or propagate absence."""
+        """The contained value used for propagation."""
         return self.value
 
 
@@ -270,7 +324,11 @@ class Nothing:
     """Represent the absence of a value."""
 
     def unwrap(self) -> NoReturn:
-        """Raise because no value is present."""
+        """Reject unwrapping an absent option.
+
+        Raises:
+            ValueError: Always, because no value is present.
+        """
         raise ValueError("Called `Option::unwrap()` on a `Nothing` value")
 
     def unwrap_or(self, default: T) -> T:
@@ -278,12 +336,20 @@ class Nothing:
         return default
 
     def expect(self, message: str) -> NoReturn:
-        """Raise with a caller-provided explanation."""
+        """Reject absence with a caller-provided explanation.
+
+        Raises:
+            ValueError: Always, using ``message``.
+        """
         raise ValueError(message)
 
     @property
     def q(self) -> NoReturn:
-        """Bubble Nothing to a catching decorator."""
+        """Propagate absence to a ``catch_nothing`` wrapper.
+
+        Raises:
+            BubbleUpNothing: Always, carrying this absent option.
+        """
         raise BubbleUpNothing(self)
 
 
@@ -293,7 +359,11 @@ Option: TypeAlias = Some[T] | Nothing
 def catch_nothing(
     func: Callable[P, Option[T]],
 ) -> Callable[P, Option[T]]:
-    """Convert bubbled Nothing values into returned Nothing values."""
+    """Convert bubbled Nothing values into returned Nothing values.
+
+    Returns:
+        A wrapper that catches propagated absence.
+    """
 
     @wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> Option[T]:

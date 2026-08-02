@@ -1,21 +1,30 @@
-"""SQLite database operations"""
+"""Exception-free SQLite database operations."""
 
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable, Generator
-from contextlib import contextmanager
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar, cast
 
-from rag_against_the_machine.errors import Nothing, Option, Some
+from rag_against_the_machine.errors import (
+    Err,
+    Nothing,
+    Ok,
+    Option,
+    Result,
+    Some,
+    StorageError,
+)
 
 T = TypeVar("T")
 
 
 @dataclass(frozen=True, slots=True)
 class SourceFileRecord:
+    """Represent one persisted source-file row."""
+
     id: int
     path: str
     file_type: str
@@ -29,6 +38,8 @@ class SourceFileRecord:
 
 @dataclass(frozen=True, slots=True)
 class ChunkInsert:
+    """Describe one chunk to insert for a source file."""
+
     chunk_index: int
     text: str
     start_character: int
@@ -42,13 +53,18 @@ class Queries:
     conn: sqlite3.Connection
 
     def __init__(self, conn: sqlite3.Connection) -> None:
+        """Bind typed queries to ``conn``."""
         self.conn = conn
 
-    def get_source_file(self, path: str) -> Option[SourceFileRecord]:
-        row = cast(
-            sqlite3.Row | None,
-            self.conn.execute(
-                """
+    def get_source_file(
+        self, path: str
+    ) -> Result[Option[SourceFileRecord], StorageError]:
+        """Return the source record for ``path`` when it exists."""
+        try:
+            row = cast(
+                sqlite3.Row | None,
+                self.conn.execute(
+                    """
                 SELECT
                     id,
                     path,
@@ -62,12 +78,14 @@ class Queries:
                 FROM source_files
                 WHERE path = ?
                 """,
-                (path,),
-            ).fetchone(),
-        )
+                    (path,),
+                ).fetchone(),
+            )
+        except sqlite3.Error as error:
+            return _query_error("get source file", error)
 
         if row is None:
-            return Nothing()
+            return Ok(Nothing())
 
         record = SourceFileRecord(
             id=cast(int, row["id"]),
@@ -81,7 +99,7 @@ class Queries:
             indexed_at_ns=cast(int, row["indexed_at_ns"]),
         )
 
-        return Some(record)
+        return Ok(Some(record))
 
     def upsert_source_file(
         self,
@@ -94,11 +112,17 @@ class Queries:
         max_chunk_size: int,
         chunker_version: int,
         indexed_at_ns: int,
-    ) -> Option[int]:
-        row = cast(
-            sqlite3.Row | None,
-            self.conn.execute(
-                """
+    ) -> Result[int, StorageError]:
+        """Insert or update a source file and return its database id.
+
+        Returns:
+            The database id, or a categorized storage error.
+        """
+        try:
+            row = cast(
+                sqlite3.Row | None,
+                self.conn.execute(
+                    """
                 INSERT INTO source_files (
                     path,
                     file_type,
@@ -120,42 +144,63 @@ class Queries:
                     indexed_at_ns = excluded.indexed_at_ns
                 RETURNING id
                 """,
-                (
-                    path,
-                    file_type,
-                    size_bytes,
-                    modified_at_ns,
-                    content_hash,
-                    max_chunk_size,
-                    chunker_version,
-                    indexed_at_ns,
-                ),
-            ).fetchone(),
-        )
+                    (
+                        path,
+                        file_type,
+                        size_bytes,
+                        modified_at_ns,
+                        content_hash,
+                        max_chunk_size,
+                        chunker_version,
+                        indexed_at_ns,
+                    ),
+                ).fetchone(),
+            )
+        except sqlite3.Error as error:
+            return _query_error("upsert source file", error)
 
         if row is None:
-            raise RuntimeError(
-                "Source-file upsert completed without returning an id"
+            return Err(
+                StorageError.INVALID_QUERY_RESULT,
+                context_msg="Source-file upsert completed without returning an id",
+                namespace="storage",
             )
 
-        return Some(cast(int, row["id"]))
+        return Ok(cast(int, row["id"]))
 
-    def delete_chunks_for_source(self, source_file_id: int) -> None:
-        _ = self.conn.execute(
-            """
-            DELETE FROM chunks
-            WHERE source_file_id = ?
-            """,
-            (source_file_id,),
-        )
+    def delete_chunks_for_source(
+        self, source_file_id: int
+    ) -> Result[None, StorageError]:
+        """Delete all chunks belonging to a source file.
+
+        Returns:
+            Success, or a categorized storage error.
+        """
+        try:
+            _ = self.conn.execute(
+                """
+                DELETE FROM chunks
+                WHERE source_file_id = ?
+                """,
+                (source_file_id,),
+            )
+        except sqlite3.Error as error:
+            return _query_error("delete source chunks", error)
+        return Ok(None)
 
     def insert_chunks(
         self,
         source_file_id: int,
         chunks: list[ChunkInsert],
-    ) -> None:
-        _ = self.conn.executemany(
-            """
+    ) -> Result[None, StorageError]:
+        """Insert a collection of chunks for one source file.
+
+        Returns:
+            Success, or a categorized storage error.
+        """
+        try:
+            _ = self.conn.executemany(
+                """
             INSERT INTO chunks (
                 source_file_id,
                 chunk_index,
@@ -166,27 +211,41 @@ class Queries:
             )
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            [
-                (
-                    source_file_id,
-                    chunk.chunk_index,
-                    chunk.text,
-                    chunk.start_character,
-                    chunk.end_character,
-                    chunk.created_at_ns,
-                )
-                for chunk in chunks
-            ],
-        )
+                [
+                    (
+                        source_file_id,
+                        chunk.chunk_index,
+                        chunk.text,
+                        chunk.start_character,
+                        chunk.end_character,
+                        chunk.created_at_ns,
+                    )
+                    for chunk in chunks
+                ],
+            )
+        except sqlite3.Error as error:
+            return _query_error("insert source chunks", error)
+        return Ok(None)
 
-    def delete_source_file(self, source_file_id: int) -> None:
-        _ = self.conn.execute(
-            """
-            DELETE FROM source_files
-            WHERE id = ?
-            """,
-            (source_file_id,),
-        )
+    def delete_source_file(
+        self, source_file_id: int
+    ) -> Result[None, StorageError]:
+        """Delete a source file and its cascaded chunks.
+
+        Returns:
+            Success, or a categorized storage error.
+        """
+        try:
+            _ = self.conn.execute(
+                """
+                DELETE FROM source_files
+                WHERE id = ?
+                """,
+                (source_file_id,),
+            )
+        except sqlite3.Error as error:
+            return _query_error("delete source file", error)
+        return Ok(None)
 
 
 class Transaction:
@@ -196,6 +255,7 @@ class Transaction:
     queries: Queries
 
     def __init__(self, conn: sqlite3.Connection) -> None:
+        """Expose transaction-scoped typed queries."""
         self.conn = conn
         self.queries = Queries(conn)
 
@@ -206,50 +266,93 @@ class Store:
     db_path: Path
 
     def __init__(self, db_path: Path) -> None:
+        """Configure storage at ``db_path`` without opening it."""
         self.db_path = db_path
 
-    def init(self) -> None:
-        """Create the database directory and initialize its schema."""
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+    def init(self) -> Result[None, StorageError]:
+        """Create the database directory and initialize its schema.
 
-        def initialize(tx: Transaction) -> None:
-            _ = tx.conn.executescript(_SCHEMA)
+        Returns:
+            Success, or a categorized storage error.
+        """
+        try:
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            return Err(
+                StorageError.DIRECTORY_CREATION_FAILED,
+                context_msg=f"Could not create the database directory: {error}",
+                namespace="storage",
+            )
 
-        self.with_tx(initialize)
+        def initialize(tx: Transaction) -> Result[None, StorageError]:
+            try:
+                _ = tx.conn.executescript(_SCHEMA)
+            except sqlite3.Error as error:
+                return _query_error("initialize schema", error)
+            return Ok(None)
 
-    @contextmanager
-    def connect(self) -> Generator[sqlite3.Connection, None, None]:
-        """Open and configure one SQLite connection."""
-        conn: sqlite3.Connection = sqlite3.connect(
-            self.db_path,
-            timeout=5.0,
-        )
+        return self.with_tx(initialize)
+
+    def with_tx(
+        self,
+        operation: Callable[[Transaction], Result[T, StorageError]],
+    ) -> Result[T, StorageError]:
+        """Execute a result-returning operation in one transaction.
+
+        Returns:
+            The operation result, or a categorized transaction error.
+        """
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=5.0)
+        except sqlite3.Error as error:
+            return Err(
+                StorageError.CONNECTION_FAILED,
+                context_msg=f"Could not open the database: {error}",
+                namespace="storage",
+            )
+
         conn.row_factory = sqlite3.Row
-
         try:
             _ = conn.execute("pragma foreign_keys = on")
             _ = conn.execute("pragma journal_mode = wal")
             _ = conn.execute("pragma synchronous = normal")
             _ = conn.execute("pragma busy_timeout = 5000")
-            yield conn
+            _ = conn.execute("begin")
+            result = operation(Transaction(conn))
+            if isinstance(result, Err):
+                conn.rollback()
+                return result
+            conn.commit()
+            return result
+        except sqlite3.Error as error:
+            conn.rollback()
+            return Err(
+                StorageError.TRANSACTION_FAILED,
+                context_msg=f"Database transaction failed: {error}",
+                namespace="storage",
+            )
+        except Exception as error:
+            conn.rollback()
+            return Err(
+                StorageError.OPERATION_FAILED,
+                context_msg=f"Storage operation failed: {error}",
+                namespace="storage",
+            )
         finally:
             conn.close()
 
-    def with_tx(
-        self,
-        operation: Callable[[Transaction], T],
-    ) -> T:
-        """Execute raw SQL and typed queries in one transaction."""
-        with self.connect() as conn:
-            try:
-                _ = conn.execute("begin")
-                result = operation(Transaction(conn))
-            except Exception:
-                conn.rollback()
-                raise
-            else:
-                conn.commit()
-                return result
+
+def _query_error(operation: str, error: sqlite3.Error) -> Err[StorageError]:
+    """Convert a SQLite query exception into a storage result.
+
+    Returns:
+        A categorized query error.
+    """
+    return Err(
+        StorageError.QUERY_FAILED,
+        context_msg=f"Could not {operation}: {error}",
+        namespace="storage",
+    )
 
 
 # normally i would use am embdded migrations dir to handle the db but

@@ -1,9 +1,12 @@
+"""Shared inotify watch registration and event normalization."""
+
 from __future__ import annotations
 
 import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from rag_against_the_machine.errors import Err, Nothing, Ok, Result, WatchError
 from rag_against_the_machine.fs.events import EventKind, FileEvent
@@ -27,6 +30,8 @@ from rag_against_the_machine.fs.inotify import (
 
 @dataclass(frozen=True)
 class WatcherOptions:
+    """Configure tree traversal and the inotify event mask."""
+
     recursive: bool = True
     follow_symlinks: bool = False
     mask: int = DEFAULT_MASK
@@ -34,13 +39,18 @@ class WatcherOptions:
 
 @dataclass(frozen=True)
 class PendingMove:
+    """Track an unmatched move-from event until its cookie expires."""
+
     path: Path
     is_dir: bool
     created_at: float
 
 
 class WatchCoordinator:
+    """Own watch descriptors, tree updates, and event normalization."""
+
     def __init__(self, backend: Inotify, root: Path, options: WatcherOptions) -> None:
+        """Create a coordinator for one backend and root directory."""
         self.backend = backend
         self.root = root.resolve()
         self.options = options
@@ -50,6 +60,11 @@ class WatchCoordinator:
         self.pending_moves: dict[int, PendingMove] = {}
 
     def initialize(self) -> Result[None, WatchError]:
+        """Validate the root and register its initial watches.
+
+        Returns:
+            Success, or a root validation or registration error.
+        """
         if not self.root.exists():
             return Err(
                 WatchError.ROOT_NOT_FOUND,
@@ -73,6 +88,11 @@ class WatchCoordinator:
         return self.add_dir(self.root)
 
     def add_dir(self, path: Path) -> Result[None, WatchError]:
+        """Register one directory unless it is already watched.
+
+        Returns:
+            Success, or a watch registration error.
+        """
         directory = path.resolve()
         if directory in self.path_to_wd:
             return Ok(None)
@@ -91,6 +111,11 @@ class WatchCoordinator:
         return Ok(None)
 
     def add_tree(self, root: Path) -> Result[None, WatchError]:
+        """Register a directory tree according to symlink options.
+
+        Returns:
+            Success, or a scan or watch registration error.
+        """
         root = root.resolve()
         try:
             for current, directory_names, _ in os.walk(
@@ -114,26 +139,29 @@ class WatchCoordinator:
         return Ok(None)
 
     def remove_mapping(self, wd: int) -> None:
+        """Forget both path mappings for a watch descriptor."""
         path = self.wd_to_path.pop(wd, Nothing())
         if isinstance(path, Nothing):
             return
         _ = self.path_to_wd.pop(path, None)
 
     def remove_subtree(self, root: Path) -> None:
+        """Forget every watched directory inside ``root``."""
         root = root.resolve()
         removals: list[tuple[int, Path]] = []
         for wd, watched_path in self.wd_to_path.items():
             try:
-                watched_path.relative_to(root)
+                _ = watched_path.relative_to(root)
             except ValueError:
                 continue
             removals.append((wd, watched_path))
 
         for wd, watched_path in removals:
-            self.wd_to_path.pop(wd, None)
-            self.path_to_wd.pop(watched_path, None)
+            _ = self.wd_to_path.pop(wd, None)
+            _ = self.path_to_wd.pop(watched_path, None)
 
     def rewrite_subtree(self, old_root: Path, new_root: Path) -> None:
+        """Rewrite mapped paths after a watched directory is renamed."""
         old_root = old_root.resolve()
         new_root = new_root.resolve()
         updates: list[tuple[int, Path, Path]] = []
@@ -146,10 +174,15 @@ class WatchCoordinator:
 
         for wd, old_path, new_path in updates:
             self.wd_to_path[wd] = new_path
-            self.path_to_wd.pop(old_path, None)
+            _ = self.path_to_wd.pop(old_path, None)
             self.path_to_wd[new_path] = wd
 
     def process(self, raw: RawEvent) -> Result[list[FileEvent], WatchError]:
+        """Normalize one raw event and update coordinator state.
+
+        Returns:
+            Zero or more normalized events, or a coordination error.
+        """
         if raw.mask & IN_Q_OVERFLOW:
             return Err(
                 WatchError.EVENT_QUEUE_OVERFLOW,
@@ -191,7 +224,12 @@ class WatchCoordinator:
                 if self.options.recursive and is_directory:
                     result = self.add_tree(path)
                     if isinstance(result, Err):
-                        return result
+                        return Err(
+                            cast(WatchError, result.error),
+                            diagnostic=result.diagnostic,
+                            context_msg=result.context_msg,
+                            namespace=result.namespace,
+                        )
                 return Ok([FileEvent(EventKind.CREATED, path, is_directory)])
 
             if previous.is_dir:
@@ -202,7 +240,12 @@ class WatchCoordinator:
             if self.options.recursive and is_directory:
                 result = self.add_tree(path)
                 if isinstance(result, Err):
-                    return result
+                    return Err(
+                        cast(WatchError, result.error),
+                        diagnostic=result.diagnostic,
+                        context_msg=result.context_msg,
+                        namespace=result.namespace,
+                    )
             return Ok([FileEvent(EventKind.CREATED, path, is_directory)])
 
         if raw.mask & IN_DELETE:
@@ -226,6 +269,11 @@ class WatchCoordinator:
         return Ok([])
 
     def flush_expired_moves(self, max_age: float = 0.1) -> list[FileEvent]:
+        """Convert expired unmatched moves into deletion events.
+
+        Returns:
+            Deletion events for moves older than ``max_age``.
+        """
         now = time.monotonic()
         expired = [
             cookie
@@ -241,6 +289,11 @@ class WatchCoordinator:
         return events
 
     def reset(self) -> Result[None, WatchError]:
+        """Clear coordinator state and rebuild initial watches.
+
+        Returns:
+            Success, or a watch registration error.
+        """
         self.wd_to_path.clear()
         self.path_to_wd.clear()
         self.pending_moves.clear()

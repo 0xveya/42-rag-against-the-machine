@@ -12,10 +12,13 @@ from .errors import Err
 class ServeOptions:
     """Document the options accepted by the development server command."""
 
-    port: int = field(default=8000, metadata={"help": "Port for the local API server."})
+    port: int = field(
+        default=8000, metadata={"help": "Port for the local API server."}
+    )
 
 
 def tmp() -> None:
+    """Run the temporary indexing demonstration command."""
     import asyncio
 
     asyncio.run(_tmp())
@@ -25,28 +28,38 @@ async def _tmp() -> None:
     """Temporary testing command."""
     from pathlib import Path
 
-    from .errors import Err
+    from .errors import Err, Ok, Result, StorageError
     from .indexing.discovery import discover_files
     from .indexing.pipeline import run_pipeline
     from .storage.db import Store, Transaction
 
     store = Store(Path("data/output/stuff.db"))
-    store.init()
+    initialized = store.init()
+    if isinstance(initialized, Err):
+        initialized.print_diagnostic()
+        return
 
-    def show_tables(tx: Transaction) -> None:
-        rows = tx.conn.execute(
-            """
-            SELECT name, type
-            FROM sqlite_master
-            WHERE type IN ('table', 'view')
-            ORDER BY name
-            """
-        ).fetchall()
+    def show_tables(tx: Transaction) -> Result[None, StorageError]:
+        try:
+            rows = tx.conn.execute(
+                """
+                SELECT name, type
+                FROM sqlite_master
+                WHERE type IN ('table', 'view')
+                ORDER BY name
+                """
+            ).fetchall()
+        except Exception as error:
+            return Err(StorageError.QUERY_FAILED, context_msg=str(error))
 
         for row in rows:
             print(f"{row['type']}: {row['name']}")
+        return Ok(None)
 
-    store.with_tx(show_tables)
+    table_result = store.with_tx(show_tables)
+    if isinstance(table_result, Err):
+        table_result.print_diagnostic()
+        return
 
     discovered = discover_files(
         source_root=Path("data/raw/gns3util"),
@@ -66,7 +79,9 @@ async def _tmp() -> None:
         return
 
     output = pipeline_result.unwrap()
-    print(f"Indexed {output.files_processed} files; skipped {output.files_skipped}.")
+    print(
+        f"Indexed {output.files_processed} files; skipped {output.files_skipped}."
+    )
     for diagnostic in output.diagnostics:
         print(f"warning: {diagnostic.filename}: {diagnostic.help_msg}")
     # print(output)
@@ -88,7 +103,11 @@ def serve(port: int = 8000) -> None:
 
 
 def build_help_command() -> Command:
-    """Build the CLI-framework command tree used to render help text."""
+    """Build the CLI-framework command tree used to render help text.
+
+    Returns:
+        The root application command.
+    """
     root = Command(
         name="rag-against-the-machine",
         short="Local RAG system for the supplied vLLM repository.",
@@ -112,7 +131,11 @@ def build_help_command() -> Command:
 
 
 def render_framework_help(argv: list[str]) -> bool:
-    """Render help with the bundled CLI framework when the user requests it."""
+    """Render help with the bundled CLI framework when requested.
+
+    Returns:
+        Whether help was rendered.
+    """
     if argv and "--help" not in argv and "-h" not in argv:
         return False
 
@@ -125,7 +148,11 @@ def render_framework_help(argv: list[str]) -> bool:
 
 
 def validate_framework_arguments(argv: list[str]) -> bool:
-    """Validate command syntax with cli_fw without replacing Fire execution."""
+    """Validate command syntax with cli_fw without replacing Fire execution.
+
+    Returns:
+        Whether validation succeeded.
+    """
     full_cli = [basename(sys.argv[0]), *argv]
     result = build_help_command().execute(argv, diagnostic_argv=full_cli)
     if isinstance(result, Err):
@@ -142,7 +169,11 @@ def run_with_fire() -> None:
 
 
 def main() -> None:
-    """Render framework help and delegate command execution to Python Fire."""
+    """Render framework help and delegate command execution to Python Fire.
+
+    Raises:
+        SystemExit: When help or argument validation terminates the command.
+    """
     argv = sys.argv[1:]
     if render_framework_help(argv):
         return
