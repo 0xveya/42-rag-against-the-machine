@@ -4,8 +4,8 @@ import sys
 from dataclasses import dataclass, field
 from os.path import basename
 
-from .cli_fw import Command
-from .errors import Err
+from rag_against_the_machine.cli_fw import Command
+from rag_against_the_machine.errors import Err
 
 
 @dataclass(frozen=True)
@@ -25,45 +25,29 @@ def tmp() -> None:
 
 
 async def _tmp() -> None:
-    """Temporary testing command."""
+    """Run initial indexing, then watch for filesystem changes."""
     from pathlib import Path
 
-    from .errors import Err, Ok, Result, StorageError
-    from .indexing.discovery import discover_files
-    from .indexing.pipeline import run_pipeline
-    from .storage.db import Store, Transaction
+    from rag_against_the_machine.errors import Err
+    from rag_against_the_machine.fs.watcher_async import AsyncWatcher
+    from rag_against_the_machine.indexing.discovery import discover_files
+    from rag_against_the_machine.indexing.fsevent_handler import handle_event
+    from rag_against_the_machine.indexing.pipeline import run_pipeline
+    from rag_against_the_machine.storage.db import Store
+
+    source_root = Path("data/raw/gns3util")
+    project_root = Path.cwd()
 
     store = Store(Path("data/output/stuff.db"))
+
     initialized = store.init()
     if isinstance(initialized, Err):
         initialized.print_diagnostic()
         return
 
-    def show_tables(tx: Transaction) -> Result[None, StorageError]:
-        try:
-            rows = tx.conn.execute(
-                """
-                SELECT name, type
-                FROM sqlite_master
-                WHERE type IN ('table', 'view')
-                ORDER BY name
-                """
-            ).fetchall()
-        except Exception as error:
-            return Err(StorageError.QUERY_FAILED, context_msg=str(error))
-
-        for row in rows:
-            print(f"{row['type']}: {row['name']}")
-        return Ok(None)
-
-    table_result = store.with_tx(show_tables)
-    if isinstance(table_result, Err):
-        table_result.print_diagnostic()
-        return
-
     discovered = discover_files(
-        source_root=Path("data/raw/gns3util"),
-        project_root=Path.cwd(),
+        source_root=source_root,
+        project_root=project_root,
     )
     if isinstance(discovered, Err):
         discovered.print_diagnostic()
@@ -79,18 +63,40 @@ async def _tmp() -> None:
         return
 
     output = pipeline_result.unwrap()
+
     print(
-        f"Indexed {output.files_processed} files; skipped {output.files_skipped}."
+        f"Initial indexing complete: "
+        f"{output.files_processed} files indexed; "
+        f"{output.files_skipped} files skipped."
     )
+
     for diagnostic in output.diagnostics:
         print(f"warning: {diagnostic.filename}: {diagnostic.help_msg}")
-    # print(output)
-    # for file in files:
-    #     # print(file)
-    #     content = read_source_file(file).unwrap()
-    #     chunks = chunk_source_file(file, content, 1_500).unwrap()
-    #     validate_chunks(content, chunks, 1500)
-    #     # print(json.dumps([asdict(x) for x in chunks], separators=(",", ":")))
+
+    watcher_result = AsyncWatcher.open(
+        source_root,
+        recursive=True,
+    )
+    if isinstance(watcher_result, Err):
+        watcher_result.print_diagnostic()
+        return
+
+    watcher = watcher_result.unwrap()
+
+    print(f"Watching for changes in {source_root.resolve()}")
+
+    async with watcher:
+        async for event_result in watcher:
+            if isinstance(event_result, Err):
+                event_result.print_diagnostic()
+                continue
+
+            event = event_result.unwrap()
+            handled = await handle_event(event, 1500, store)
+            if isinstance(handled, Err):
+                handled.print_diagnostic()
+            elif handled.value:
+                print(f"Index updated: {event.path}")
 
 
 def serve(port: int = 8000) -> None:

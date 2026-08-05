@@ -50,7 +50,9 @@ class AsyncWatcher:
         self._backend = backend
         self._coordinator = coordinator
 
-        self._queue: asyncio.Queue[QueueItem] = asyncio.Queue(maxsize=queue_maxsize)
+        self._queue: asyncio.Queue[QueueItem] = asyncio.Queue(
+            maxsize=queue_maxsize
+        )
 
         self._loop: Option[asyncio.AbstractEventLoop] = Nothing()
         self._rename_timer: Option[asyncio.TimerHandle] = Nothing()
@@ -150,7 +152,9 @@ class AsyncWatcher:
         except Exception as error:
             return Err(
                 WatchError.EVENT_LOOP_REGISTRATION_FAILED,
-                context_msg=(f"Failed to register the inotify file descriptor: {error}"),
+                context_msg=(
+                    f"Failed to register the inotify file descriptor: {error}"
+                ),
                 namespace="watch",
             )
 
@@ -318,11 +322,15 @@ class AsyncWatcher:
 
     def _schedule_move_flush(self) -> None:
         """Schedule one timer when the coordinator has pending moves."""
-        if not self._coordinator.pending_moves or isinstance(self._loop, Nothing):
+        if not self._coordinator.pending_moves or isinstance(
+            self._loop, Nothing
+        ):
             return
         if isinstance(self._rename_timer, Some):
             return
-        self._rename_timer = Some(self._loop.value.call_later(0.1, self._flush_expired_moves))
+        self._rename_timer = Some(
+            self._loop.value.call_later(0.1, self._flush_expired_moves)
+        )
 
     def _flush_expired_moves(self) -> None:
         """Enqueue expired moves and reschedule while moves remain pending."""

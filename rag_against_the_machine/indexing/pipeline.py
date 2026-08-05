@@ -9,12 +9,15 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from rag_against_the_machine.errors import (
     Diagnostic,
     Err,
     FileProcessingError,
+    Nothing,
     Ok,
+    Option,
     PipelineError,
     Result,
     StorageError,
@@ -26,6 +29,7 @@ from rag_against_the_machine.models.chunk import Chunk
 from rag_against_the_machine.models.source import SourceFile
 from rag_against_the_machine.storage.db import (
     ChunkInsert,
+    SourceFileRecord,
     Store,
     Transaction,
 )
@@ -81,21 +85,52 @@ async def run_pipeline(
     if not source_files:
         return Err(PipelineError.EMPTY_INPUT)
 
+    files_to_process: list[SourceFile] = []
+    files_skipped = 0
+    for source_file in source_files:
+        state_result = await asyncio.to_thread(
+            source_needs_reindex,
+            store,
+            source_file,
+            max_chunk_size,
+        )
+        if isinstance(state_result, Err):
+            return Err(
+                PipelineError.DATABASE_FAILED,
+                context_msg=state_result.context_msg,
+                namespace="indexing::pipeline",
+            )
+        if state_result.value:
+            files_to_process.append(source_file)
+        else:
+            files_skipped += 1
+
+    if not files_to_process:
+        return Ok(
+            PipelineOutput(
+                diagnostics=[],
+                files_discovered=len(source_files),
+                files_processed=0,
+                files_skipped=files_skipped,
+            )
+        )
+
     worker_count = min(
         os.cpu_count() or 4,
-        len(source_files),
+        len(files_to_process),
     )
 
     file_queue: asyncio.Queue[SourceFile | None] = asyncio.Queue()
 
-    for source_file in source_files:
+    for source_file in files_to_process:
         await file_queue.put(source_file)
 
     for _ in range(worker_count):
         await file_queue.put(None)
 
     worker_tasks = [
-        asyncio.create_task(worker(file_queue, max_chunk_size)) for _ in range(worker_count)
+        asyncio.create_task(worker(file_queue, max_chunk_size))
+        for _ in range(worker_count)
     ]
 
     try:
@@ -125,8 +160,6 @@ async def run_pipeline(
 
     processed_files: list[ProcessedFile] = []
     diagnostics: list[Diagnostic] = []
-    files_skipped = 0
-
     for output in worker_outputs:
         processed_files.extend(output.processed_files)
         diagnostics.extend(output.diagnostics)
@@ -167,6 +200,45 @@ async def run_pipeline(
             files_processed=files_persisted,
             files_skipped=files_skipped,
         )
+    )
+
+
+def source_needs_reindex(
+    store: Store,
+    source_file: SourceFile,
+    max_chunk_size: int,
+) -> Result[bool, StorageError]:
+    """Compare one file's current state with its persisted index state.
+
+    Returns:
+        Whether the file is new, changed, or uses stale indexing settings.
+    """
+
+    def lookup(
+        tx: Transaction,
+    ) -> Result[Option[SourceFileRecord], StorageError]:
+        return tx.queries.get_source_file(source_file.stored_path)
+
+    stored_result = store.with_tx(lookup)
+    if isinstance(stored_result, Err):
+        return stored_result
+
+    stored = stored_result.value
+    if isinstance(stored, Nothing):
+        return Ok(True)
+
+    record = cast(SourceFileRecord, stored.value)
+    try:
+        stat = source_file.absolute_path.stat()
+    except OSError:
+        return Ok(True)
+
+    return Ok(
+        record.size_bytes != stat.st_size
+        or record.max_chunk_size != max_chunk_size
+        or record.chunker_version != _CURRENT_CHUNKER_VERSION
+        or record.file_type != source_file.file_type
+        or record.content_hash != hash_file(source_file.absolute_path)
     )
 
 

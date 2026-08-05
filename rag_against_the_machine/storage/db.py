@@ -227,6 +227,31 @@ class Queries:
             return _query_error("insert source chunks", error)
         return Ok(None)
 
+    def get_id_for_source_file(
+        self, path: str
+    ) -> Result[Option[int], StorageError]:
+        """Return the source record for ``path`` when it exists."""
+        try:
+            row = cast(
+                sqlite3.Row | None,
+                self.conn.execute(
+                    """
+                SELECT
+                    id
+                FROM source_files
+                WHERE path = ?
+                """,
+                    (path,),
+                ).fetchone(),
+            )
+        except sqlite3.Error as error:
+            return _query_error("get source file", error)
+
+        if row is None:
+            return Ok(Nothing())
+
+        return Ok(Some(cast(int, row["id"])))
+
     def delete_source_file(
         self, source_file_id: int
     ) -> Result[None, StorageError]:
