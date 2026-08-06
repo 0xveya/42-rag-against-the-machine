@@ -27,10 +27,16 @@ class MinimalArgs:
     required_flag: str
 
 
-def assert_has_help_msg(result: Err[CliError], substring: str, invert: bool = False) -> None:
+def assert_has_help_msg(
+    result: Err[CliError], substring: str, invert: bool = False
+) -> None:
     """Helper to check help message substring."""
-    assert result.diagnostic is not None, "Expected a diagnostic object, but got None"
-    assert result.diagnostic.help_msg is not None, "Expected help_msg to be a string, but got None"
+    assert result.diagnostic is not None, (
+        "Expected a diagnostic object, but got None"
+    )
+    assert result.diagnostic.help_msg is not None, (
+        "Expected help_msg to be a string, but got None"
+    )
     if invert:
         assert substring not in result.diagnostic.help_msg
     else:
@@ -90,7 +96,9 @@ def test_missing_required_argument():
 
     assert isinstance(result, Err)
     assert result.error == CliError.MISSING_REQUIRED_ARGUMENT
-    assert_has_help_msg(cast(Err[CliError], result), "Missing required arguments: --name")
+    assert_has_help_msg(
+        cast(Err[CliError], result), "Missing required arguments: --name"
+    )
 
 
 def test_missing_argument_value():
@@ -101,7 +109,9 @@ def test_missing_argument_value():
     result_eol = parser.parse(["--name"])
     assert isinstance(result_eol, Err)
     assert result_eol.error == CliError.MISSING_ARGUMENT_VALUE
-    assert_has_help_msg(cast(Err[CliError], result_eol), "Option --name requires an argument")
+    assert_has_help_msg(
+        cast(Err[CliError], result_eol), "Option --name requires an argument"
+    )
 
     # Next item is another flag instead of a value
     result_flag = parser.parse(["--name", "--verbose"])
@@ -118,7 +128,9 @@ def test_unexpected_positional_argument():
 
     assert isinstance(result, Err)
     assert result.error == CliError.UNKNOWN_ARGUMENT
-    assert_has_help_msg(cast(Err[CliError], result), "Unexpected positional argument")
+    assert_has_help_msg(
+        cast(Err[CliError], result), "Unexpected positional argument"
+    )
 
 
 def test_invalid_choice_fuzzy_suggestion():
@@ -142,7 +154,9 @@ def test_invalid_choice_no_suggestion():
 
     assert isinstance(result, Err)
     assert result.error == CliError.INVALID_CHOICE
-    assert_has_help_msg(cast(Err[CliError], result), "Did you mean", invert=True)
+    assert_has_help_msg(
+        cast(Err[CliError], result), "Did you mean", invert=True
+    )
 
 
 def test_unknown_argument_typo_suggestion():
@@ -229,7 +243,9 @@ def test_positional_arguments():
     assert res.value.flag is True
 
     # 3. Positional args provided as flags
-    res = parser.parse_into(PositionalTestArgs, ["--first", "val1", "--second", "100"])
+    res = parser.parse_into(
+        PositionalTestArgs, ["--first", "val1", "--second", "100"]
+    )
     assert isinstance(res, Ok)
     assert res.value.first == "val1"
     assert res.value.second == 100
@@ -286,7 +302,9 @@ def test_nested_dataclasses():
     assert res.value.debug is True
 
     # 2. Nested field defaults used
-    res = parser.parse_into(ParentConfig, ["--title", "MyApp", "--child.host", "localhost"])
+    res = parser.parse_into(
+        ParentConfig, ["--title", "MyApp", "--child.host", "localhost"]
+    )
     assert isinstance(res, Ok)
     assert res.value.child.port == 8080
 
@@ -294,7 +312,10 @@ def test_nested_dataclasses():
     res_err = parser.parse(["--title", "MyApp"])
     assert isinstance(res_err, Err)
     assert res_err.error == CliError.MISSING_REQUIRED_ARGUMENT
-    assert_has_help_msg(cast(Err[CliError], res_err), "Missing required arguments: --child.host")
+    assert_has_help_msg(
+        cast(Err[CliError], res_err),
+        "Missing required arguments: --child.host",
+    )
 
 
 def test_command_subcommands():
@@ -319,14 +340,20 @@ def test_command_subcommands():
 
     @dataclass
     class GreetCmd:
-        name: str = field(metadata={"positional": True, "help": "Name of user"})
-        shout: bool = field(default=False, metadata={"help": "Shout the greeting"})
+        name: str = field(
+            metadata={"positional": True, "help": "Name of user"}
+        )
+        shout: bool = field(
+            default=False, metadata={"help": "Shout the greeting"}
+        )
 
     def run_greet(args: GreetCmd) -> str:
         msg = f"Hello {args.name}"
         return msg.upper() if args.shout else msg
 
-    greet_cmd = Command("greet", "Greet a user", schema=GreetCmd, run=run_greet)
+    greet_cmd = Command(
+        "greet", "Greet a user", schema=GreetCmd, run=run_greet
+    )
     root.add_command(greet_cmd)
 
     # Test executing a simple subcommand
@@ -348,7 +375,9 @@ def test_command_subcommands():
     res_err = root.execute(["config"])
     assert isinstance(res_err, Err)
     assert res_err.error == CliError.MISSING_REQUIRED_ARGUMENT
-    assert_has_help_msg(cast(Err[CliError], res_err), "Command 'config' requires a subcommand.")
+    assert_has_help_msg(
+        cast(Err[CliError], res_err), "Command 'config' requires a subcommand."
+    )
 
 
 def test_arg_helper_and_nargs():
@@ -361,7 +390,9 @@ def test_arg_helper_and_nargs():
     parser = Parser.from_dataclass(CopyArgs)
 
     # Test N-args positional mapping
-    res = parser.parse_into(CopyArgs, ["file1.txt", "file2.txt", "file3.txt", "/tmp", "--verbose"])
+    res = parser.parse_into(
+        CopyArgs, ["file1.txt", "file2.txt", "file3.txt", "/tmp", "--verbose"]
+    )
     assert isinstance(res, Ok)
     assert res.value.sources == ["file1.txt", "file2.txt", "file3.txt"]
     assert res.value.dest == "/tmp"

@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RAG CLI and evaluation</title>
+  </head>
+  <body>
+    <header>
+      <h1>CLI and evaluation</h1>
+      <nav>
+        <a href="/">Query</a> | <a href="/eval.html">CLI and evaluation</a>
+      </nav>
+    </header>
+
+    <main>
+      <section>
+        <h2>Run CLI command</h2>
+        <form id="command-form">
+          <p>
+            <label for="command">Command</label><br />
+            <select id="command" name="command">
+              <option value="index">index</option>
+              <option value="search">search</option>
+              <option value="search_dataset">search_dataset</option>
+              <option value="answer">answer</option>
+              <option value="answer_dataset">answer_dataset</option>
+              <option value="evaluate">evaluate</option>
+            </select>
+          </p>
+          <p>
+            <label for="arguments">Arguments (one argument per line)</label
+            ><br />
+            <textarea
+              id="arguments"
+              name="arguments"
+              rows="12"
+              cols="90"
+              placeholder="--source_path&#10;data/raw&#10;--max_chunk_size&#10;2000"
+            ></textarea>
+          </p>
+          <button id="run-command" type="submit">Run command</button>
+        </form>
+      </section>
+
+      <section>
+        <h2>Official moulinette</h2>
+        <p>
+          This runs the complete <code>make moulinette</code> target, including
+          setup, indexing, dataset search, and official evaluation.
+        </p>
+        <button id="run-moulinette" type="button">Run moulinette</button>
+      </section>
+
+      <section>
+        <h2>Status</h2>
+        <output id="status">idle</output>
+      </section>
+
+      <section>
+        <h2>Standard output</h2>
+        <pre id="stdout"></pre>
+      </section>
+
+      <section>
+        <h2>Standard error</h2>
+        <pre id="stderr"></pre>
+      </section>
+    </main>
+
+    <script>
+      const form = document.querySelector("#command-form");
+      const command = document.querySelector("#command");
+      const argumentsInput = document.querySelector("#arguments");
+      const runCommandButton = document.querySelector("#run-command");
+      const runMoulinetteButton = document.querySelector("#run-moulinette");
+      const status = document.querySelector("#status");
+      const stdout = document.querySelector("#stdout");
+      const stderr = document.querySelector("#stderr");
+
+      function argumentsFromTextarea() {
+        return argumentsInput.value
+          .split("\n")
+          .map((argument) => argument.trim())
+          .filter(Boolean);
+      }
+
+      async function invoke(selectedCommand, args) {
+        runCommandButton.disabled = true;
+        runMoulinetteButton.disabled = true;
+        status.value = `running ${selectedCommand}`;
+        stdout.textContent = "";
+        stderr.textContent = "";
+        try {
+          const response = await fetch("/api/commands", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ command: selectedCommand, arguments: args }),
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.detail || "Command failed");
+          stdout.textContent = result.stdout;
+          stderr.textContent = result.stderr;
+          status.value = `${result.command} exited with code ${result.exit_code}`;
+        } catch (error) {
+          status.value = error.message;
+        } finally {
+          runCommandButton.disabled = false;
+          runMoulinetteButton.disabled = false;
+        }
+      }
+
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        invoke(command.value, argumentsFromTextarea());
+      });
+      runMoulinetteButton.addEventListener("click", () =>
+        invoke("moulinette", []),
+      );
+    </script>
+  </body>
+</html>

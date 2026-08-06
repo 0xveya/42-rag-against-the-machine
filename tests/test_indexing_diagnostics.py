@@ -19,7 +19,9 @@ def _source_file(path: Path) -> SourceFile:
     )
 
 
-def _assert_path_diagnostic(err: Err[DiscoveryError] | Err[ReadError], filename: str) -> None:
+def _assert_path_diagnostic(
+    err: Err[DiscoveryError] | Err[ReadError], filename: str
+) -> None:
     assert err.diagnostic is not None
     diagnostic = err.diagnostic
     assert diagnostic.filename == filename
@@ -29,7 +31,9 @@ def _assert_path_diagnostic(err: Err[DiscoveryError] | Err[ReadError], filename:
     assert diagnostic.col_end == len(filename)
 
 
-def test_discovery_missing_source_uses_complete_diagnostic(tmp_path: Path) -> None:
+def test_discovery_missing_source_uses_complete_diagnostic(
+    tmp_path: Path,
+) -> None:
     source_root = tmp_path / "missing"
 
     result = discover_files(source_root, tmp_path)
@@ -44,7 +48,10 @@ def test_discovery_missing_source_uses_complete_diagnostic(tmp_path: Path) -> No
 @pytest.mark.parametrize(
     ("operation", "expected_error"),
     [
-        (lambda source: source.absolute_path.unlink(), ReadError.FILE_NOT_FOUND),
+        (
+            lambda source: source.absolute_path.unlink(),
+            ReadError.FILE_NOT_FOUND,
+        ),
         (
             lambda source: source.absolute_path.write_bytes(b"\xff"),
             ReadError.FILE_DECODE_FAILED,

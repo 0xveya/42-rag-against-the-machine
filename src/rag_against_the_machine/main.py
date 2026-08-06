@@ -3,6 +3,7 @@
 import sys
 from dataclasses import dataclass, field
 from os.path import basename
+from pathlib import Path
 
 from rag_against_the_machine.cli_commands import (
     AnswerDatasetOptions,
@@ -19,25 +20,7 @@ from rag_against_the_machine.cli_commands import (
     search_dataset,
 )
 from rag_against_the_machine.cli_fw import Command
-from rag_against_the_machine.errors import Err
-
-
-@dataclass(frozen=True)
-class TmpOptions:
-    """Options for the temporary indexing and generation smoke test."""
-
-    model: str = field(
-        default="Qwen/Qwen3-0.6B",
-        metadata={"help": "Local/Hugging Face model name."},
-    )
-    question: str = field(
-        default="",
-        metadata={"help": "Question used by the temporary RAG smoke test."},
-    )
-    k: int = field(
-        default=5,
-        metadata={"help": "Number of source chunks to retrieve."},
-    )
+from rag_against_the_machine.errors import Err, Ok, Some
 
 
 @dataclass(frozen=True)
@@ -45,139 +28,59 @@ class ServeOptions:
     """Document the options accepted by the development server command."""
 
     port: int = field(
-        default=8000, metadata={"help": "Port for the local API server."}
+        default=8000,
+        metadata={"help": "Port for the local API server (0-65535)."},
+    )
+    raw_directory: str = field(
+        default="data/raw",
+        metadata={"help": "Directory whose child folders are repositories."},
+    )
+    database_path: str = field(
+        default="data/processed/index.db",
+        metadata={"help": "SQLite search-index path."},
+    )
+    model: str = field(
+        default="Qwen/Qwen3-0.6B",
+        metadata={"help": "Transformers model used for streamed answers."},
+    )
+    max_new_tokens: int = field(
+        default=256,
+        metadata={"help": "Maximum tokens generated for each answer."},
     )
 
 
-def tmp(
+def _valid_port(port: int) -> bool:
+    """Return whether *port* can be passed to a TCP bind call."""
+    return 0 <= port <= 65535
+
+
+def serve(
+    port: int = 8000,
+    raw_directory: str = "data/raw",
+    database_path: str = "data/processed/index.db",
     model: str = "Qwen/Qwen3-0.6B",
-    question: str = "",
-    k: int = 5,
+    max_new_tokens: int = 256,
 ) -> None:
-    """Run the temporary indexing and generation smoke test.
+    """Run the FastAPI UI, WebSocket API, and live index watcher."""
+    if not _valid_port(port):
+        raise ValueError(
+            f"invalid port {port}: expected a value from 0 to 65535"
+        )
+    if max_new_tokens <= 0:
+        raise ValueError("max_new_tokens must be greater than zero")
 
-    Examples:
-        ``tmp --model Qwen/Qwen3-0.6B``
-        ``tmp --model Qwen/Qwen3-0.6B --question "How is indexing done?"``
-        ``tmp --question "How is indexing done?" --k 10``
-    """
-    import asyncio
-
-    asyncio.run(_tmp(model, question, k))
-
-
-async def _tmp(
-    model: str = "Qwen/Qwen3-0.6B",
-    question: str = "",
-    k: int = 5,
-) -> None:
-    """Run initial indexing, answer one question, then watch for changes."""
-    from pathlib import Path
-
-    from rag_against_the_machine.errors import Err
-    from rag_against_the_machine.fs.watcher_async import AsyncWatcher
-    from rag_against_the_machine.indexing.discovery import discover_files
-    from rag_against_the_machine.indexing.fsevent_handler import handle_event
-    from rag_against_the_machine.indexing.pipeline import run_pipeline
-    from rag_against_the_machine.storage.db import Store
-
-    source_root = Path("data/raw/")
-    project_root = Path.cwd()
-
-    store = Store(Path("data/output/stuff.db"))
-
-    initialized = store.init()
-    if isinstance(initialized, Err):
-        initialized.print_diagnostic()
-        return
-
-    discovered = discover_files(
-        source_root=source_root,
-        project_root=project_root,
-    )
-    if isinstance(discovered, Err):
-        discovered.print_diagnostic()
-        return
-
-    pipeline_result = await run_pipeline(
-        discovered.unwrap(),
-        max_chunk_size=1500,
-        store=store,
-    )
-    if isinstance(pipeline_result, Err):
-        pipeline_result.print_diagnostic()
-        return
-
-    output = pipeline_result.unwrap()
-
-    print(
-        f"Initial indexing complete: "
-        f"{output.files_processed} files indexed; "
-        f"{output.files_skipped} files skipped."
-    )
-    for diagnostic in output.diagnostics:
-        print(f"warning: {diagnostic.filename}: {diagnostic.help_msg}")
-
-    from rag_against_the_machine.generation import create_answer_function
-    from rag_against_the_machine.rag import RagService
-
-    backend_result = create_answer_function(model_name=model)
-    if isinstance(backend_result, Err):
-        backend_result.print_diagnostic()
-        return
-
-    answer_function = backend_result.unwrap()
-    rag_service = RagService(store, answer_function)
-    print(f"Generation configured: Transformers, model={model}")
-
-    if not question:
-        try:
-            question = input("Question (empty to skip): ").strip()
-        except EOFError:
-            question = ""
-
-    if question:
-        answer_result = rag_service.answer(question, k=k)
-        if isinstance(answer_result, Err):
-            answer_result.print_diagnostic()
-            return
-        print(answer_result.value.model_dump_json(indent=2))
-    else:
-        print("No question supplied; skipping generation.")
-
-    watcher_result = AsyncWatcher.open(
-        source_root,
-        recursive=True,
-    )
-    if isinstance(watcher_result, Err):
-        watcher_result.print_diagnostic()
-        return
-
-    watcher = watcher_result.unwrap()
-
-    print(f"Watching for changes in {source_root.resolve()}")
-
-    async with watcher:
-        async for event_result in watcher:
-            if isinstance(event_result, Err):
-                event_result.print_diagnostic()
-                continue
-
-            event = event_result.unwrap()
-            handled = await handle_event(event, 1500, store)
-            if isinstance(handled, Err):
-                handled.print_diagnostic()
-            elif handled.value:
-                print(f"Index updated: {event.path}")
-
-
-def serve(port: int = 8000) -> None:
-    """Run the bootstrap FastAPI server with its health endpoint."""
     import uvicorn
 
     from .server.app import create_app
+    from .server.service import WebRagService
 
-    uvicorn.run(create_app(), host="127.0.0.1", port=port)
+    service = WebRagService(
+        raw_directory=Path(raw_directory),
+        database_path=Path(database_path),
+        model_name=model,
+        max_new_tokens=max_new_tokens,
+    )
+    uvicorn.run(create_app(Some(service)), host="127.0.0.1", port=port)
 
 
 def build_help_command() -> Command:
@@ -189,20 +92,13 @@ def build_help_command() -> Command:
     root = Command(
         name="rag-against-the-machine",
         short="Local RAG system for the supplied codebase.",
-        example="uv run python -m rag_against_the_machine serve --port 8000",
+        example="uv run python -m src serve --port 8000",
     )
     _ = root.add_command(
         Command(
             name="serve",
-            short="Run the bootstrap FastAPI server.",
+            short="Run the learning UI and WebSocket API.",
             schema=ServeOptions,
-        )
-    )
-    _ = root.add_command(
-        Command(
-            name="tmp",
-            short="Temporary indexing and generation smoke test.",
-            schema=TmpOptions,
         )
     )
     for name, short, schema in (
@@ -250,6 +146,20 @@ def validate_framework_arguments(argv: list[str]) -> bool:
     if isinstance(result, Err):
         result.print_diagnostic()
         return False
+    if isinstance(result, Ok) and isinstance(result.value, ServeOptions):
+        if not _valid_port(result.value.port):
+            print(
+                f"Invalid port {result.value.port}: --port must be between "
+                "0 and 65535.",
+                file=sys.stderr,
+            )
+            return False
+        if result.value.max_new_tokens <= 0:
+            print(
+                "Invalid --max_new_tokens: value must be greater than zero.",
+                file=sys.stderr,
+            )
+            return False
     return True
 
 
@@ -260,7 +170,6 @@ def run_with_fire() -> None:
     fire.Fire(
         {
             "serve": serve,
-            "tmp": tmp,
             "index": index,
             "search": search,
             "search_dataset": search_dataset,
@@ -282,7 +191,10 @@ def main() -> None:
         return
     if not validate_framework_arguments(argv):
         raise SystemExit(2)
-    run_with_fire()
+    try:
+        run_with_fire()
+    except KeyboardInterrupt:
+        print("\nServer stopped. Goodbye!")
 
 
 if __name__ == "__main__":

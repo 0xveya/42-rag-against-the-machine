@@ -148,6 +148,22 @@ class GenerationError(Enum):
     ANSWER_FAILED = auto()
 
 
+class WebError(Enum):
+    """Enumerate failures exposed by the local web control API."""
+
+    INVALID_REPOSITORY = auto()
+    STORAGE_FAILED = auto()
+    DISCOVERY_FAILED = auto()
+    INDEX_FAILED = auto()
+    INDEX_CLEANUP_FAILED = auto()
+    RETRIEVAL_FAILED = auto()
+    MODEL_LOAD_FAILED = auto()
+    GENERATION_FAILED = auto()
+    INVALID_COMMAND = auto()
+    COMMAND_FAILED = auto()
+    REPOSITORY_CLONE_FAILED = auto()
+
+
 E = TypeVar("E", bound=Enum)
 T = TypeVar("T")
 R = TypeVar("R")

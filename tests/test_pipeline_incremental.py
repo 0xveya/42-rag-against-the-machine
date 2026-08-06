@@ -10,7 +10,9 @@ from rag_against_the_machine.models.source import SourceFile
 from rag_against_the_machine.storage.db import Store
 
 
-def test_startup_skips_current_file_and_reindexes_appended_tail(tmp_path: Path) -> None:
+def test_startup_skips_current_file_and_reindexes_appended_tail(
+    tmp_path: Path,
+) -> None:
     source_path = tmp_path / "current.md"
     original = "# Current state\n\nThe original indexed content.\n"
     appended = "\n## Fixed tail chunk\n\nunique_database_tail_marker\n"

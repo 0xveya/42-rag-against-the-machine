@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RAG</title>
+  </head>
+  <body>
+    <header>
+      <h1>RAG</h1>
+      <nav>
+        <a href="/">Query</a> | <a href="/eval.html">CLI and evaluation</a>
+      </nav>
+      <p>Connection: <output id="connection">connecting</output></p>
+    </header>
+
+    <main>
+      <section aria-labelledby="repository-heading">
+        <h2 id="repository-heading">Repository</h2>
+        <p>
+          <label for="repository">Repository</label><br />
+          <select id="repository" name="repository" required disabled>
+            <option value="">Loading repositories...</option>
+          </select>
+        </p>
+        <p>Path: <output id="repository-path">data/raw</output></p>
+        <p>Available: <output id="repository-count">0</output></p>
+        <p>
+          <button id="refresh-repositories" type="button">
+            Refresh repositories
+          </button>
+          <button id="reindex" type="button" disabled>
+            Reindex selected repository
+          </button>
+        </p>
+        <form id="add-repository-form">
+          <h3>Add repository</h3>
+          <p>
+            <label for="repository-url">HTTPS Git URL</label><br />
+            <input
+              id="repository-url"
+              name="url"
+              type="url"
+              size="60"
+              required
+            />
+          </p>
+          <p>
+            <label for="repository-name">Name (optional)</label><br />
+            <input id="repository-name" name="name" pattern="[A-Za-z0-9._-]*" />
+          </p>
+          <button id="add-repository" type="submit">Clone into data/raw</button>
+        </form>
+      </section>
+
+      <form id="question-form">
+        <h2>Query</h2>
+        <p>
+          <label for="question">Question</label><br />
+          <textarea
+            id="question"
+            name="question"
+            rows="8"
+            cols="80"
+            required
+          ></textarea>
+        </p>
+        <p>
+          <label for="k">Number of sources</label><br />
+          <input id="k" name="k" type="number" value="5" min="1" max="50" />
+        </p>
+        <p><button id="ask" type="submit" disabled>Run query</button></p>
+      </form>
+
+      <section aria-labelledby="status-heading">
+        <h2 id="status-heading">Status</h2>
+        <output id="status">starting</output>
+      </section>
+
+      <section aria-labelledby="answer-heading">
+        <h2 id="answer-heading">Answer</h2>
+        <pre id="answer" aria-live="polite"></pre>
+      </section>
+
+      <section aria-labelledby="sources-heading">
+        <h2 id="sources-heading">Sources</h2>
+        <ol id="sources"></ol>
+      </section>
+    </main>
+
+    <script>
+      const form = document.querySelector("#question-form");
+      const addRepositoryForm = document.querySelector("#add-repository-form");
+      const addRepositoryButton = document.querySelector("#add-repository");
+      const repositoryUrl = document.querySelector("#repository-url");
+      const repositoryName = document.querySelector("#repository-name");
+      const repository = document.querySelector("#repository");
+      const repositoryPath = document.querySelector("#repository-path");
+      const repositoryCount = document.querySelector("#repository-count");
+      const refreshRepositories = document.querySelector(
+        "#refresh-repositories",
+      );
+      const reindex = document.querySelector("#reindex");
+      const question = document.querySelector("#question");
+      const k = document.querySelector("#k");
+      const ask = document.querySelector("#ask");
+      const status = document.querySelector("#status");
+      const connection = document.querySelector("#connection");
+      const answer = document.querySelector("#answer");
+      const sources = document.querySelector("#sources");
+
+      let repositories = [];
+      let socket;
+      let reconnectTimer;
+      let busy = false;
+
+      function updateControls() {
+        const connected = socket?.readyState === WebSocket.OPEN;
+        const selected = Boolean(repository.value);
+        repository.disabled = repositories.length === 0 || busy;
+        reindex.disabled = !selected || busy;
+        ask.disabled = !connected || !selected || busy;
+      }
+
+      function updateRepositoryDetails() {
+        const selected = repositories.find(
+          (item) => item.repository_id === repository.value,
+        );
+        repositoryPath.value = selected?.path || "No repository selected";
+        repositoryCount.value = String(repositories.length);
+        updateControls();
+      }
+
+      async function loadRepositories() {
+        refreshRepositories.disabled = true;
+        const previousSelection = repository.value;
+        try {
+          const response = await fetch("/api/repositories");
+          if (!response.ok) throw new Error("Could not load repositories");
+          repositories = await response.json();
+          repository.replaceChildren();
+
+          if (repositories.length === 0) {
+            repository.append(new Option("No repositories found", ""));
+            status.value = "No repository folders found in the raw directory";
+          } else {
+            for (const item of repositories) {
+              repository.append(new Option(item.name, item.repository_id));
+            }
+            if (
+              repositories.some(
+                (item) => item.repository_id === previousSelection,
+              )
+            ) {
+              repository.value = previousSelection;
+            }
+          }
+          updateRepositoryDetails();
+        } finally {
+          refreshRepositories.disabled = false;
+        }
+      }
+
+      async function reindexRepository() {
+        if (!repository.value) return;
+        busy = true;
+        status.value = `Reindexing ${repository.value}`;
+        updateControls();
+        try {
+          const response = await fetch(
+            `/api/repositories/${encodeURIComponent(repository.value)}/reindex`,
+            { method: "POST" },
+          );
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.detail || "Reindex failed");
+          status.value = `Reindex complete: ${result.files_processed} processed, ${result.files_discovered} discovered`;
+        } catch (error) {
+          status.value = error.message;
+        } finally {
+          busy = false;
+          updateControls();
+        }
+      }
+
+      function connect() {
+        clearTimeout(reconnectTimer);
+        const protocol = location.protocol === "https:" ? "wss" : "ws";
+        socket = new WebSocket(`${protocol}://${location.host}/ws`);
+
+        socket.addEventListener("open", () => {
+          connection.value = "connected";
+          status.value = "ready";
+          updateControls();
+        });
+
+        socket.addEventListener("close", () => {
+          connection.value = "disconnected; retrying";
+          status.value = "offline";
+          updateControls();
+          reconnectTimer = setTimeout(connect, 1000);
+        });
+
+        socket.addEventListener("message", ({ data }) => {
+          const message = JSON.parse(data);
+          if (message.type === "status") status.value = message.data;
+          if (message.type === "token") answer.textContent += message.data;
+          if (message.type === "sources") renderSources(message.data);
+          if (message.type === "done" || message.type === "error") {
+            busy = false;
+            status.value = message.type === "done" ? "complete" : message.data;
+            updateControls();
+          }
+        });
+      }
+
+      function renderSources(items) {
+        sources.replaceChildren();
+        for (const source of items) {
+          const item = document.createElement("li");
+          item.textContent = `${source.file_path}:${source.first_character_index}-${source.last_character_index}`;
+          sources.append(item);
+        }
+      }
+
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        if (
+          !socket ||
+          socket.readyState !== WebSocket.OPEN ||
+          !repository.value
+        )
+          return;
+        answer.textContent = "";
+        sources.replaceChildren();
+        busy = true;
+        status.value = "queued";
+        updateControls();
+        socket.send(
+          JSON.stringify({
+            repository: repository.value,
+            question: question.value.trim(),
+            k: Number(k.value),
+          }),
+        );
+      });
+
+      addRepositoryForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        addRepositoryButton.disabled = true;
+        status.value = "Cloning repository";
+        try {
+          const url = repositoryUrl.value;
+          const requestedName =
+            repositoryName.value ||
+            new URL(url).pathname
+              .replace(/\/$/, "")
+              .split("/")
+              .pop()
+              .replace(/\.git$/, "");
+          const response = await fetch("/api/repositories", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url, name: repositoryName.value }),
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.detail || "Clone failed");
+          status.value =
+            result.exit_code === 0 ? "Repository added" : result.stderr;
+          if (result.exit_code === 0) {
+            addRepositoryForm.reset();
+            await loadRepositories();
+            if (
+              repositories.some((item) => item.repository_id === requestedName)
+            ) {
+              repository.value = requestedName;
+              updateRepositoryDetails();
+            }
+          }
+        } catch (error) {
+          status.value = error.message;
+        } finally {
+          addRepositoryButton.disabled = false;
+        }
+      });
+
+      repository.addEventListener("change", updateRepositoryDetails);
+      refreshRepositories.addEventListener("click", () => {
+        loadRepositories().catch((error) => {
+          status.value = error.message;
+        });
+      });
+      reindex.addEventListener("click", reindexRepository);
+
+      loadRepositories().catch((error) => {
+        status.value = error.message;
+      });
+      connect();
+    </script>
+  </body>
+</html>

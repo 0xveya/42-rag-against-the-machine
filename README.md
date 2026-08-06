@@ -26,3 +26,6 @@ https://fastapi.tiangolo.com/advanced/websockets/
 https://huggingface.co/docs/transformers/index
 https://www.sqlitetutorial.net/sqlite-trigger/
 https://docs.python.org/3/library/multiprocessing.html
+https://cloud.google.com/use-cases/retrieval-augmented-generation
+https://google.github.io/python-fire/guide/
+https://sqlite.org/fts5.html

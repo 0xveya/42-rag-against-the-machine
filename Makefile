@@ -15,6 +15,8 @@ ANSWER_OUTPUT_DIR ?= data/output/search_results_and_answer/UnansweredQuestions
 SEARCH_RESULTS_PATH ?= $(SEARCH_OUTPUT_DIR)/$(notdir $(DATASET_PATH))
 MODEL ?= Qwen/Qwen3-0.6B
 ARGS ?=
+REPO_URL ?=
+REPO_NAME ?=
 
 DATASETS_URL := https://cdn.intra.42.fr/document/document/54812/datasets_public.zip
 MOULINETTE_URL := https://cdn.intra.42.fr/document/document/54815/moulinette.zip
@@ -25,10 +27,10 @@ REFERENCE_DIR ?= /tmp/42-rag-reference
 VLLM_ZIP := $(firstword $(wildcard $(DOWNLOADS)/vllm-0.10.1.zip data/vllm-0.10.1.zip))
 MYPY_FLAGS := --warn-return-any --warn-unused-ignores --ignore-missing-imports --disallow-untyped-defs --check-untyped-defs
 
-.PHONY: install run debug clean lint lint-strict test index search \
+.PHONY: install run debug serve clean lint lint-strict test index search \
 	search-dataset answer answer-dataset evaluate subject-download subject-setup \
 	subject-index subject-search moulinette moulinette-compare subject-eval \
-	subject-all benchmark-repos benchmark-index
+	subject-all benchmark-repos benchmark-index add-repo
 
 install:
 	$(UV) sync --dev
@@ -38,6 +40,18 @@ run:
 
 debug:
 	$(UV) run python -m pdb -m src $(ARGS)
+
+serve:
+	$(UV) run python -m src serve --port $${PORT:-8000} --model "$(MODEL)" $(ARGS)
+
+add-repo:
+	@test -n "$(REPO_URL)" || { echo "Usage: make add-repo REPO_URL=https://...git [REPO_NAME=name]" >&2; exit 2; }
+	@mkdir -p data/raw
+	@name="$(REPO_NAME)"; \
+	if [[ -z "$$name" ]]; then name="$$(basename "$(REPO_URL)" .git)"; fi; \
+	[[ "$$name" =~ ^[A-Za-z0-9._-]+$$ ]] || { echo "Invalid repository name: $$name" >&2; exit 2; }; \
+	test ! -e "data/raw/$$name" || { echo "data/raw/$$name already exists" >&2; exit 2; }; \
+	git clone --depth 1 -- "$(REPO_URL)" "data/raw/$$name"
 
 index:
 	$(UV) run python -m src index --max_chunk_size $(MAX_CHUNK_SIZE) $(ARGS)

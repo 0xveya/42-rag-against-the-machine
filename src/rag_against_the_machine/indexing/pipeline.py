@@ -91,8 +91,12 @@ async def run_pipeline(
     source_files: list[SourceFile],
     max_chunk_size: int,
     store: Store,
+    *,
+    force: bool = False,
 ) -> Result[PipelineOutput, PipelineError]:
     """Process and persist discovered source files concurrently.
+
+    ``force`` rebuilds files even when their stored metadata is unchanged.
 
     Returns:
         A pipeline summary, or a categorized pipeline error.
@@ -125,7 +129,8 @@ async def run_pipeline(
             continue
 
         metadata_changed = (
-            record.size_bytes != stat.st_size
+            force
+            or record.size_bytes != stat.st_size
             or record.modified_at_ns != stat.st_mtime_ns
             or record.max_chunk_size != max_chunk_size
             or record.chunker_version != _CURRENT_CHUNKER_VERSION
@@ -578,9 +583,7 @@ def persist_processed_files(
             _set_fts_triggers(tx, enabled=True)
         return Ok(None)
 
-    return cast(
-        Result[None, StorageError], store.with_tx(operation)
-    )
+    return cast(Result[None, StorageError], store.with_tx(operation))
 
 
 def _set_fts_triggers(tx: Transaction, *, enabled: bool) -> None:
