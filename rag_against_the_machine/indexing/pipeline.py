@@ -7,6 +7,7 @@ import hashlib
 import math
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -25,7 +26,7 @@ from rag_against_the_machine.errors import (
 )
 from rag_against_the_machine.indexing.chunk_helpers import validate_chunks
 from rag_against_the_machine.indexing.chunker import chunk_source_file
-from rag_against_the_machine.indexing.reader import read_source_file
+from rag_against_the_machine.indexing.reader import read_source_file_with_hash
 from rag_against_the_machine.models.chunk import Chunk
 from rag_against_the_machine.models.source import SourceFile
 from rag_against_the_machine.storage.db import (
@@ -36,7 +37,8 @@ from rag_against_the_machine.storage.db import (
 )
 
 _CURRENT_CHUNKER_VERSION = 2
-_MAX_FILES_PER_TRANSACTION = 25
+_MAX_FILES_PER_TRANSACTION = 250
+_MAX_PROCESSING_WORKERS = 64
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,25 +88,42 @@ async def run_pipeline(
     if not source_files:
         return Err(PipelineError.EMPTY_INPUT)
 
+    lookup_started = time.perf_counter()
+    stored_result = await asyncio.to_thread(store.get_all_source_files)
+    if isinstance(stored_result, Err):
+        return Err(
+            PipelineError.DATABASE_FAILED,
+            context_msg=stored_result.context_msg,
+            namespace="indexing::pipeline",
+        )
+
+    stored_by_path = stored_result.value
     files_to_process: list[SourceFile] = []
     files_skipped = 0
     for source_file in source_files:
-        state_result = await asyncio.to_thread(
-            source_needs_reindex,
-            store,
-            source_file,
-            max_chunk_size,
+        record = stored_by_path.get(source_file.stored_path)
+        if record is None:
+            files_to_process.append(source_file)
+            continue
+
+        try:
+            stat = source_file.absolute_path.stat()
+        except OSError:
+            files_to_process.append(source_file)
+            continue
+
+        metadata_changed = (
+            record.size_bytes != stat.st_size
+            or record.modified_at_ns != stat.st_mtime_ns
+            or record.max_chunk_size != max_chunk_size
+            or record.chunker_version != _CURRENT_CHUNKER_VERSION
+            or record.file_type != source_file.file_type
         )
-        if isinstance(state_result, Err):
-            return Err(
-                PipelineError.DATABASE_FAILED,
-                context_msg=state_result.context_msg,
-                namespace="indexing::pipeline",
-            )
-        if state_result.value:
+        if metadata_changed:
             files_to_process.append(source_file)
         else:
             files_skipped += 1
+    print(f"[index] state lookup: {time.perf_counter() - lookup_started:.3f}s")
 
     if not files_to_process:
         return Ok(
@@ -116,8 +135,14 @@ async def run_pipeline(
             )
         )
 
+    loop = asyncio.get_running_loop()
+    if getattr(loop, "_default_executor", None) is None:
+        loop.set_default_executor(
+            ThreadPoolExecutor(max_workers=_MAX_PROCESSING_WORKERS)
+        )
     worker_count = min(
         os.cpu_count() or 4,
+        _MAX_PROCESSING_WORKERS,
         len(files_to_process),
     )
 
@@ -134,6 +159,7 @@ async def run_pipeline(
         for _ in range(worker_count)
     ]
 
+    processing_started = time.perf_counter()
     try:
         worker_outputs = await asyncio.gather(*worker_tasks)
     except asyncio.CancelledError:
@@ -166,19 +192,29 @@ async def run_pipeline(
         diagnostics.extend(output.diagnostics)
         files_skipped += output.files_skipped
 
+    print(
+        f"[index] read + chunk: {time.perf_counter() - processing_started:.3f}s"
+    )
     files_persisted = 0
 
     try:
-        # Commit bounded batches so completed work is flushed incrementally.
-        # This avoids one transaction per file without making the whole run
+        persistence_started = time.perf_counter()
+        # commit bounded batches so completed work is flushed incrementally.
+        # this avoids one transaction per file without making the whole run
         # one large all-or-nothing transaction.
         batch_size = persistence_batch_size(len(processed_files))
+        print(f"[index] persistence batch size: {batch_size}")
         for batch_start in range(0, len(processed_files), batch_size):
             batch = processed_files[batch_start : batch_start + batch_size]
+            clean_import = not stored_by_path
             persist_result = await asyncio.to_thread(
                 persist_processed_files,
                 store,
                 batch,
+                clean_import=clean_import,
+                disable_fts=clean_import and batch_start == 0,
+                rebuild_fts=clean_import
+                and batch_start + batch_size >= len(processed_files),
             )
             if isinstance(persist_result, Err):
                 return Err(
@@ -194,6 +230,10 @@ async def run_pipeline(
     except Exception:
         return Err(PipelineError.DATABASE_FAILED)
 
+    print(
+        "[index] database persistence: "
+        f"{time.perf_counter() - persistence_started:.3f}s"
+    )
     return Ok(
         PipelineOutput(
             diagnostics=diagnostics,
@@ -234,13 +274,17 @@ def source_needs_reindex(
     except OSError:
         return Ok(True)
 
-    return Ok(
+    metadata_changed = (
         record.size_bytes != stat.st_size
+        or record.modified_at_ns != stat.st_mtime_ns
         or record.max_chunk_size != max_chunk_size
         or record.chunker_version != _CURRENT_CHUNKER_VERSION
         or record.file_type != source_file.file_type
-        or record.content_hash != hash_file(source_file.absolute_path)
     )
+    if not metadata_changed:
+        return Ok(False)
+
+    return Ok(record.content_hash != hash_file(source_file.absolute_path))
 
 
 async def worker(
@@ -264,7 +308,8 @@ async def worker(
             if source_file is None:
                 break
 
-            result = await read_and_chunk(
+            result = await asyncio.to_thread(
+                read_and_chunk_sync,
                 source_file,
                 max_chunk_size,
             )
@@ -288,7 +333,7 @@ async def worker(
     )
 
 
-async def read_and_chunk(
+def read_and_chunk_sync(
     source_file: SourceFile,
     max_chunk_size: int,
 ) -> Result[ProcessedFile, FileProcessingError]:
@@ -297,10 +342,7 @@ async def read_and_chunk(
     Returns:
         The processed file, or a categorized processing error.
     """
-    read_result = await asyncio.to_thread(
-        read_source_file,
-        source_file,
-    )
+    read_result = read_source_file_with_hash(source_file)
 
     if isinstance(read_result, Err):
         read_error = read_result.error
@@ -322,10 +364,9 @@ async def read_and_chunk(
             namespace="indexing::pipeline",
         )
 
-    text = read_result.unwrap()
+    text, content_hash = read_result.unwrap()
 
-    chunk_result = await asyncio.to_thread(
-        chunk_source_file,
+    chunk_result = chunk_source_file(
         source_file,
         text,
         max_chunk_size,
@@ -353,7 +394,7 @@ async def read_and_chunk(
 
     chunks = chunk_result.unwrap()
     try:
-        await asyncio.to_thread(validate_chunks, text, chunks, max_chunk_size)
+        validate_chunks(text, chunks, max_chunk_size)
     except ValueError as error:
         return Err(
             FileProcessingError.CHUNK_FAILED,
@@ -370,12 +411,7 @@ async def read_and_chunk(
         )
 
     try:
-        stat = await asyncio.to_thread(source_file.absolute_path.stat)
-
-        content_hash = await asyncio.to_thread(
-            hash_file,
-            source_file.absolute_path,
-        )
+        stat = source_file.absolute_path.stat()
     except OSError as error:
         return Err(
             FileProcessingError.READ_FAILED,
@@ -405,6 +441,18 @@ async def read_and_chunk(
     )
 
 
+async def read_and_chunk(
+    source_file: SourceFile,
+    max_chunk_size: int,
+) -> Result[ProcessedFile, FileProcessingError]:
+    """Async compatibility wrapper for event-driven reindexing."""
+    return await asyncio.to_thread(
+        read_and_chunk_sync,
+        source_file,
+        max_chunk_size,
+    )
+
+
 def persistence_batch_size(file_count: int) -> int:
     """Choose a bounded batch size from the number of files to persist.
 
@@ -424,6 +472,10 @@ def persistence_batch_size(file_count: int) -> int:
 def persist_processed_files(
     store: Store,
     processed_files: list[ProcessedFile],
+    *,
+    clean_import: bool = False,
+    disable_fts: bool = False,
+    rebuild_fts: bool = False,
 ) -> Result[None, StorageError]:
     """Persist one bounded batch and commit it as a single transaction.
 
@@ -433,17 +485,82 @@ def persist_processed_files(
 
     @catch_bubble
     def operation(tx: Transaction) -> Result[None, StorageError]:
+        if disable_fts:
+            _set_fts_triggers(tx, enabled=False)
+
         for processed in processed_files:
-            _ = persist_processed_file(tx, processed).q
+            _ = persist_processed_file(
+                tx,
+                processed,
+                clean_import=clean_import,
+            ).q
+
+        if rebuild_fts:
+            _ = tx.conn.execute(
+                "INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild')"
+            )
+            _set_fts_triggers(tx, enabled=True)
         return Ok(None)
 
     return store.with_tx(operation)
+
+
+def _set_fts_triggers(tx: Transaction, *, enabled: bool) -> None:
+    """Toggle FTS maintenance triggers around a clean bulk import.
+
+    Returns:
+        None. The transaction is modified in place.
+    """
+    trigger_names = (
+        "chunks_after_insert",
+        "chunks_after_delete",
+        "chunks_after_update",
+    )
+    if not enabled:
+        for name in trigger_names:
+            _ = tx.conn.execute(f"DROP TRIGGER IF EXISTS {name}")
+        return
+
+    _ = tx.conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS chunks_after_insert
+        AFTER INSERT ON chunks
+        BEGIN
+            INSERT INTO chunks_fts(rowid, text, source_file_id)
+            VALUES (new.id, new.text, new.source_file_id);
+        END
+        """
+    )
+    _ = tx.conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS chunks_after_delete
+        AFTER DELETE ON chunks
+        BEGIN
+            INSERT INTO chunks_fts(chunks_fts, rowid, text, source_file_id)
+            VALUES ('delete', old.id, old.text, old.source_file_id);
+        END
+        """
+    )
+    _ = tx.conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS chunks_after_update
+        AFTER UPDATE ON chunks
+        BEGIN
+            INSERT INTO chunks_fts(chunks_fts, rowid, text, source_file_id)
+            VALUES ('delete', old.id, old.text, old.source_file_id);
+            INSERT INTO chunks_fts(rowid, text, source_file_id)
+            VALUES (new.id, new.text, new.source_file_id);
+        END
+        """
+    )
 
 
 @catch_bubble
 def persist_processed_file(
     tx: Transaction,
     processed: ProcessedFile,
+    *,
+    clean_import: bool = False,
 ) -> Result[None, StorageError]:
     """Write one file using an already-open transaction.
 
@@ -461,7 +578,8 @@ def persist_processed_file(
         indexed_at_ns=processed.indexed_at_ns,
     ).q
 
-    _ = tx.queries.delete_chunks_for_source(source_file_id).q
+    if not clean_import:
+        _ = tx.queries.delete_chunks_for_source(source_file_id).q
 
     created_at_ns = time.time_ns()
     chunk_inserts = [

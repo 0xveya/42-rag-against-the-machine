@@ -12,3 +12,16 @@ server for bonus
 testing stuff
 polish
 🤓
+
+Resources
+https://docs.python.org/3/library/asyncio.html
+https://docs.python.org/3/library/sqlite3.html
+https://docs.python.org/3/library/asyncio-queue.html
+https://tree-sitter.github.io/tree-sitter/
+https://github.com/tree-sitter/py-tree-sitter
+https://man.archlinux.org/man/inotify.7
+https://docs.python.org/3/library/ast.html
+https://fastapi.tiangolo.com/
+https://fastapi.tiangolo.com/advanced/websockets/
+https://huggingface.co/docs/transformers/index
+https://www.sqlitetutorial.net/sqlite-trigger/

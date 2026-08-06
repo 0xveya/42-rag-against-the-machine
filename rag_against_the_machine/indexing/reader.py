@@ -1,5 +1,9 @@
 """Read discovered source files as UTF-8 text."""
 
+from __future__ import annotations
+
+import hashlib
+
 from rag_against_the_machine.errors import Diagnostic, Ok, ReadError, Result
 from rag_against_the_machine.indexing.error_helpers import (
     make_read_error,
@@ -32,10 +36,28 @@ def read_source_file(
     Returns:
         Decoded text, or a categorized read error.
     """
+    result = read_source_file_with_hash(source_file)
+    if isinstance(result, Ok):
+        return Ok(result.value[0])
+    return result
+
+
+def read_source_file_with_hash(
+    source_file: SourceFile,
+) -> Result[tuple[str, str], ReadError]:
+    """Read and hash a source file in one filesystem pass.
+
+    Returns:
+        Newline-normalized text and the SHA-256 hash of the original bytes.
+    """
     path = source_file.absolute_path
 
     try:
-        return Ok(path.read_text(encoding="utf-8"))
+        content = path.read_bytes()
+        text = content.decode("utf-8")
+        # Match TextIOWrapper's universal-newline behavior used previously.
+        text = text.replace("\\r\\n", "\\n").replace("\\r", "\\n")
+        return Ok((text, hashlib.sha256(content).hexdigest()))
 
     except FileNotFoundError:
         return make_read_error(

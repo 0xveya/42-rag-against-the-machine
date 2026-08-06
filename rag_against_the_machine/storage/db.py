@@ -334,6 +334,49 @@ class Queries:
             return _query_error("delete source file", error)
         return Ok(None)
 
+    def get_all_source_files(
+        self,
+    ) -> Result[dict[str, SourceFileRecord], StorageError]:
+        """Load all indexed source-file metadata keyed by path."""
+        try:
+            rows = cast(
+                list[sqlite3.Row],
+                self.conn.execute(
+                    """
+                    SELECT
+                        id,
+                        path,
+                        file_type,
+                        size_bytes,
+                        modified_at_ns,
+                        content_hash,
+                        max_chunk_size,
+                        chunker_version,
+                        indexed_at_ns
+                    FROM source_files
+                    """
+                ).fetchall(),
+            )
+        except sqlite3.Error as error:
+            return _query_error("get all source files", error)
+
+        records = {
+            cast(str, row["path"]): SourceFileRecord(
+                id=cast(int, row["id"]),
+                path=cast(str, row["path"]),
+                file_type=cast(str, row["file_type"]),
+                size_bytes=cast(int, row["size_bytes"]),
+                modified_at_ns=cast(int, row["modified_at_ns"]),
+                content_hash=cast(str, row["content_hash"]),
+                max_chunk_size=cast(int, row["max_chunk_size"]),
+                chunker_version=cast(int, row["chunker_version"]),
+                indexed_at_ns=cast(int, row["indexed_at_ns"]),
+            )
+            for row in rows
+        }
+
+        return Ok(records)
+
 
 class Transaction:
     """Transaction-scoped typed queries and raw connection access."""
@@ -404,6 +447,9 @@ class Store:
             _ = conn.execute("pragma journal_mode = wal")
             _ = conn.execute("pragma synchronous = normal")
             _ = conn.execute("pragma busy_timeout = 5000")
+            _ = conn.execute("pragma temp_store = memory")
+            _ = conn.execute("pragma cache_size = -131072")
+            _ = conn.execute("pragma mmap_size = 268435456")
             _ = conn.execute("begin")
             result = operation(Transaction(conn))
             if isinstance(result, Err):
@@ -447,6 +493,9 @@ class Store:
         try:
             _ = conn.execute("pragma foreign_keys = on")
             _ = conn.execute("pragma busy_timeout = 5000")
+            _ = conn.execute("pragma temp_store = memory")
+            _ = conn.execute("pragma cache_size = -131072")
+            _ = conn.execute("pragma mmap_size = 268435456")
             return operation(Queries(conn))
         except sqlite3.Error as error:
             return Err(
@@ -456,6 +505,16 @@ class Store:
             )
         finally:
             conn.close()
+
+    def get_all_source_files(
+        self,
+    ) -> Result[dict[str, SourceFileRecord], StorageError]:
+        """Load all indexed source-file metadata in one read connection.
+
+        Returns:
+            Records keyed by their stored path, or a storage error.
+        """
+        return self.read(lambda queries: queries.get_all_source_files())
 
 
 def _query_error(operation: str, error: sqlite3.Error) -> Err[StorageError]:
