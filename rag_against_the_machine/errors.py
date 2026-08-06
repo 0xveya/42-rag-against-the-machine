@@ -140,6 +140,13 @@ class StorageError(Enum):
     OPERATION_FAILED = auto()
 
 
+class GenerationError(Enum):
+    """Enumerate failures exposed by local model backends."""
+
+    MODEL_LOAD_FAILED = auto()
+    ANSWER_FAILED = auto()
+
+
 E = TypeVar("E", bound=Enum)
 T = TypeVar("T")
 

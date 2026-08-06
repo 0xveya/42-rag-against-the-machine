@@ -22,6 +22,18 @@ T = TypeVar("T")
 
 
 @dataclass(frozen=True, slots=True)
+class SearchHit:
+    """One ranked chunk returned by full-text search."""
+
+    chunk_id: int
+    file_path: str
+    start_character: int
+    end_character: int
+    text: str
+    score: float
+
+
+@dataclass(frozen=True, slots=True)
 class SourceFileRecord:
     """Represent one persisted source-file row."""
 
@@ -100,6 +112,56 @@ class Queries:
         )
 
         return Ok(Some(record))
+
+    def search_chunks(
+        self,
+        query: str,
+        limit: int,
+    ) -> Result[list[SearchHit], StorageError]:
+        """Return the highest-ranking chunks for an FTS5 query."""
+        if limit <= 0:
+            return Ok([])
+
+        try:
+            rows = cast(
+                list[sqlite3.Row],
+                self.conn.execute(
+                    """
+                    SELECT
+                        chunks.id AS chunk_id,
+                        source_files.path AS file_path,
+                        chunks.start_character,
+                        chunks.end_character,
+                        chunks.text,
+                        bm25(chunks_fts) AS score
+                    FROM chunks_fts
+                    JOIN chunks
+                        ON chunks.id = chunks_fts.rowid
+                    JOIN source_files
+                        ON source_files.id = chunks.source_file_id
+                    WHERE chunks_fts MATCH ?
+                    ORDER BY score ASC
+                    LIMIT ?
+                    """,
+                    (query, limit),
+                ).fetchall(),
+            )
+        except sqlite3.Error as error:
+            return _query_error("search chunks", error)
+
+        hits = [
+            SearchHit(
+                chunk_id=cast(int, row["chunk_id"]),
+                file_path=cast(str, row["file_path"]),
+                start_character=cast(int, row["start_character"]),
+                end_character=cast(int, row["end_character"]),
+                text=cast(str, row["text"]),
+                score=cast(float, row["score"]),
+            )
+            for row in rows
+        ]
+
+        return Ok(hits)
 
     def upsert_source_file(
         self,
@@ -361,6 +423,35 @@ class Store:
             return Err(
                 StorageError.OPERATION_FAILED,
                 context_msg=f"Storage operation failed: {error}",
+                namespace="storage",
+            )
+        finally:
+            conn.close()
+
+    def read(
+        self,
+        operation: Callable[[Queries], Result[T, StorageError]],
+    ) -> Result[T, StorageError]:
+        """Execute a read-only database operation."""
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=5.0)
+        except sqlite3.Error as error:
+            return Err(
+                StorageError.CONNECTION_FAILED,
+                context_msg=f"Could not open the database: {error}",
+                namespace="storage",
+            )
+
+        conn.row_factory = sqlite3.Row
+
+        try:
+            _ = conn.execute("pragma foreign_keys = on")
+            _ = conn.execute("pragma busy_timeout = 5000")
+            return operation(Queries(conn))
+        except sqlite3.Error as error:
+            return Err(
+                StorageError.QUERY_FAILED,
+                context_msg=f"Read operation failed: {error}",
                 namespace="storage",
             )
         finally:

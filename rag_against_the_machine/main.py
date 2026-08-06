@@ -4,8 +4,36 @@ import sys
 from dataclasses import dataclass, field
 from os.path import basename
 
+from rag_against_the_machine.cli_commands import (
+    AnswerDatasetOptions,
+    AnswerOptions,
+    EvaluateOptions,
+    IndexOptions,
+    SearchDatasetOptions,
+    SearchOptions,
+    answer,
+    answer_dataset,
+    evaluate,
+    index,
+    search,
+    search_dataset,
+)
 from rag_against_the_machine.cli_fw import Command
 from rag_against_the_machine.errors import Err
+
+
+@dataclass(frozen=True)
+class TmpOptions:
+    """Options for the temporary indexing and generation smoke test."""
+
+    model: str = field(
+        default="Qwen/Qwen3-0.6B",
+        metadata={"help": "Local/Hugging Face model name."},
+    )
+    question: str = field(
+        default="",
+        metadata={"help": "Question used by the temporary RAG smoke test."},
+    )
 
 
 @dataclass(frozen=True)
@@ -17,15 +45,26 @@ class ServeOptions:
     )
 
 
-def tmp() -> None:
-    """Run the temporary indexing demonstration command."""
+def tmp(
+    model: str = "Qwen/Qwen3-0.6B",
+    question: str = "",
+) -> None:
+    """Run the temporary indexing and generation smoke test.
+
+    Examples:
+        ``tmp --model Qwen/Qwen3-0.6B``
+        ``tmp --model Qwen/Qwen3-0.6B --question "How is indexing done?"``
+    """
     import asyncio
 
-    asyncio.run(_tmp())
+    asyncio.run(_tmp(model, question))
 
 
-async def _tmp() -> None:
-    """Run initial indexing, then watch for filesystem changes."""
+async def _tmp(
+    model: str = "Qwen/Qwen3-0.6B",
+    question: str = "",
+) -> None:
+    """Run initial indexing, answer one question, then watch for changes."""
     from pathlib import Path
 
     from rag_against_the_machine.errors import Err
@@ -69,9 +108,35 @@ async def _tmp() -> None:
         f"{output.files_processed} files indexed; "
         f"{output.files_skipped} files skipped."
     )
-
     for diagnostic in output.diagnostics:
         print(f"warning: {diagnostic.filename}: {diagnostic.help_msg}")
+
+    from rag_against_the_machine.generation import create_answer_function
+    from rag_against_the_machine.rag import RagService
+
+    backend_result = create_answer_function(model_name=model)
+    if isinstance(backend_result, Err):
+        backend_result.print_diagnostic()
+        return
+
+    answer_function = backend_result.unwrap()
+    rag_service = RagService(store, answer_function)
+    print(f"Generation configured: Transformers, model={model}")
+
+    if not question:
+        try:
+            question = input("Question (empty to skip): ").strip()
+        except EOFError:
+            question = ""
+
+    if question:
+        answer_result = rag_service.answer(question)
+        if isinstance(answer_result, Err):
+            answer_result.print_diagnostic()
+            return
+        print(answer_result.value.model_dump_json(indent=2))
+    else:
+        print("No question supplied; skipping generation.")
 
     watcher_result = AsyncWatcher.open(
         source_root,
@@ -116,7 +181,7 @@ def build_help_command() -> Command:
     """
     root = Command(
         name="rag-against-the-machine",
-        short="Local RAG system for the supplied vLLM repository.",
+        short="Local RAG system for the supplied codebase.",
         example="uv run python -m rag_against_the_machine serve --port 8000",
     )
     _ = root.add_command(
@@ -129,9 +194,23 @@ def build_help_command() -> Command:
     _ = root.add_command(
         Command(
             name="tmp",
-            short="Temporary testing command.",
+            short="Temporary indexing and generation smoke test.",
+            schema=TmpOptions,
         )
     )
+    for name, short, schema in (
+        ("index", "Index source files.", IndexOptions),
+        ("search", "Search one question.", SearchOptions),
+        ("search_dataset", "Search a RAG dataset.", SearchDatasetOptions),
+        ("answer", "Answer one question.", AnswerOptions),
+        (
+            "answer_dataset",
+            "Answer a search-results dataset.",
+            AnswerDatasetOptions,
+        ),
+        ("evaluate", "Evaluate recall@k.", EvaluateOptions),
+    ):
+        _ = root.add_command(Command(name=name, short=short, schema=schema))
 
     return root
 
@@ -146,8 +225,8 @@ def render_framework_help(argv: list[str]) -> bool:
         return False
 
     root = build_help_command()
-    if argv and argv[0] == "serve":
-        root.commands["serve"].help()
+    if argv and argv[0] in root.commands:
+        root.commands[argv[0]].help()
     else:
         root.help()
     return True
@@ -171,7 +250,18 @@ def run_with_fire() -> None:
     """Load Python Fire only once framework validation has succeeded."""
     import fire
 
-    fire.Fire({"serve": serve, "tmp": tmp})
+    fire.Fire(
+        {
+            "serve": serve,
+            "tmp": tmp,
+            "index": index,
+            "search": search,
+            "search_dataset": search_dataset,
+            "answer": answer,
+            "answer_dataset": answer_dataset,
+            "evaluate": evaluate,
+        }
+    )
 
 
 def main() -> None:
