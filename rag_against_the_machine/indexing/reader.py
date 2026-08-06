@@ -52,17 +52,23 @@ def read_source_file(
     except IsADirectoryError:
         return make_read_error(
             ReadError.FILE_IS_DIRECTORY,
-            _file_diagnostic(source_file, "Provide a source file, not a directory."),
+            _file_diagnostic(
+                source_file, "Provide a source file, not a directory."
+            ),
         )
 
     except UnicodeDecodeError:
         return make_read_error(
             ReadError.FILE_DECODE_FAILED,
-            _file_diagnostic(source_file, "Ensure the file uses UTF-8 encoding."),
+            _file_diagnostic(
+                source_file, "Ensure the file uses UTF-8 encoding."
+            ),
         )
 
     except OSError:
         return make_read_error(
             ReadError.FILE_READ_FAILED,
-            _file_diagnostic(source_file, "Check the file and filesystem state."),
+            _file_diagnostic(
+                source_file, "Check the file and filesystem state."
+            ),
         )

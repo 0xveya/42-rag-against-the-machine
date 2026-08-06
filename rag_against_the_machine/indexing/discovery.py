@@ -12,16 +12,20 @@ from rag_against_the_machine.errors import (
 from rag_against_the_machine.indexing.error_helpers import (
     make_discovery_error,
 )
+from rag_against_the_machine.indexing.languages.registry import (
+    file_type_for_extension,
+    ignored_directory_names_for_file_type,
+)
 from rag_against_the_machine.models.source import (
     FileType,
     SourceFile,
 )
 
-_SUFFIX_TYPES: dict[str, FileType] = {
-    ".py": "python",
+_DOCUMENT_SUFFIX_TYPES: dict[str, FileType] = {
     ".md": "markdown",
     ".markdown": "markdown",
     ".txt": "text",
+    ".rst": "text",
 }
 
 _IGNORED_DIRECTORY_NAMES = {
@@ -30,8 +34,6 @@ _IGNORED_DIRECTORY_NAMES = {
     ".pytest_cache",
     ".ruff_cache",
     ".venv",
-    "__pycache__",
-    "node_modules",
 }
 
 
@@ -113,7 +115,7 @@ def discover_files(
         )
 
     try:
-        source_root.relative_to(project_root)
+        _ = source_root.relative_to(project_root)
     except ValueError:
         return make_discovery_error(
             DiscoveryError.SOURCE_OUTSIDE_PROJECT,
@@ -131,11 +133,22 @@ def discover_files(
             if not path.is_file():
                 continue
 
-            if any(folder in _IGNORED_DIRECTORY_NAMES for folder in path.parts):
+            if any(
+                folder in _IGNORED_DIRECTORY_NAMES for folder in path.parts
+            ):
                 continue
 
-            file_type = _SUFFIX_TYPES.get(path.suffix.lower())
+            extension = path.suffix.casefold()
+            file_type: FileType | None = _DOCUMENT_SUFFIX_TYPES.get(extension)
             if file_type is None:
+                file_type = file_type_for_extension(extension)
+            if file_type is None:
+                continue
+
+            ignored_directories = ignored_directory_names_for_file_type(
+                file_type
+            )
+            if any(folder in ignored_directories for folder in path.parts):
                 continue
 
             if not os.access(path, os.R_OK):

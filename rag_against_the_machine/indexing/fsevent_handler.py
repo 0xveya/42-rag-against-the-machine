@@ -14,6 +14,10 @@ from rag_against_the_machine.errors import (
     catch_bubble,
 )
 from rag_against_the_machine.fs.events import EventKind, FileEvent
+from rag_against_the_machine.indexing.languages.registry import (
+    file_type_for_extension,
+    ignored_directory_names_for_file_type,
+)
 from rag_against_the_machine.indexing.pipeline import (
     persist_processed_file,
     read_and_chunk,
@@ -23,7 +27,19 @@ from rag_against_the_machine.models.source import FileType, SourceFile
 from rag_against_the_machine.storage.db import Store, Transaction
 
 EventHandlingResult = Ok[bool] | Err[FileProcessingError] | Err[StorageError]
-_SUPPORTED_SUFFIXES = {".py", ".md", ".markdown", ".txt"}
+_DOCUMENT_SUFFIX_TYPES = {
+    ".md": "markdown",
+    ".markdown": "markdown",
+    ".txt": "text",
+    ".rst": "text",
+}
+_IGNORED_DIRECTORY_NAMES = {
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+}
 
 
 async def handle_event(
@@ -76,7 +92,16 @@ async def handle_event(
 
 def is_supported(path: Path) -> bool:
     """Return whether initial discovery would include this file."""
-    return path.suffix.lower() in _SUPPORTED_SUFFIXES
+    extension = path.suffix.casefold()
+    file_type = _DOCUMENT_SUFFIX_TYPES.get(extension)
+    if file_type is None:
+        file_type = file_type_for_extension(extension)
+    if file_type is None:
+        return False
+    if any(folder in _IGNORED_DIRECTORY_NAMES for folder in path.parts):
+        return False
+    ignored_directories = ignored_directory_names_for_file_type(file_type)
+    return not any(folder in ignored_directories for folder in path.parts)
 
 
 def handle_ext(suffix: str) -> FileType:
@@ -85,13 +110,14 @@ def handle_ext(suffix: str) -> FileType:
     Returns:
         The file type used by the reader and chunker.
     """
-    match suffix.lower():
-        case ".py":
-            return "python"
-        case ".md" | ".markdown":
-            return "markdown"
-        case _:
-            return "text"
+    extension = suffix.casefold()
+    document_type = _DOCUMENT_SUFFIX_TYPES.get(extension)
+    if document_type is not None:
+        return document_type
+    code_type = file_type_for_extension(extension)
+    if code_type is None:
+        raise ValueError(f"Unsupported source suffix: {suffix}")
+    return code_type
 
 
 def stored_path(path: Path) -> str:

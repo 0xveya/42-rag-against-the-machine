@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from rag_against_the_machine.errors import Err, GenerationError, Ok, Result
+from rag_against_the_machine.errors import (
+    Diagnostic,
+    Err,
+    GenerationError,
+    Ok,
+    Result,
+)
 from rag_against_the_machine.generation.functional import (
     AnswerFunction,
     make_transformers_answer,
@@ -39,9 +45,19 @@ def generate_answer(
     """Run a closure and normalize backend failures into project errors."""
     try:
         return Ok(answer_function(question, hits, max_new_tokens))
-    except (RuntimeError, ValueError, OSError, TypeError) as error:
+    except Exception as error:
+        # Backend errors vary by model and device-map configuration. Keep the
+        # original exception visible instead of reducing it to a bare enum.
         return Err(
             GenerationError.ANSWER_FAILED,
-            context_msg=f"Could not generate an answer: {error}",
+            diagnostic=Diagnostic(
+                filename="generation",
+                line_num=1,
+                line_text="model.generate()",
+                col_start=0,
+                col_end=len("model.generate()"),
+                help_msg=f"{type(error).__name__}: {error}",
+            ),
+            context_msg="Could not generate an answer",
             namespace="generation",
         )

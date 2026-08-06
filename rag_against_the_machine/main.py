@@ -34,6 +34,10 @@ class TmpOptions:
         default="",
         metadata={"help": "Question used by the temporary RAG smoke test."},
     )
+    k: int = field(
+        default=5,
+        metadata={"help": "Number of source chunks to retrieve."},
+    )
 
 
 @dataclass(frozen=True)
@@ -48,21 +52,24 @@ class ServeOptions:
 def tmp(
     model: str = "Qwen/Qwen3-0.6B",
     question: str = "",
+    k: int = 5,
 ) -> None:
     """Run the temporary indexing and generation smoke test.
 
     Examples:
         ``tmp --model Qwen/Qwen3-0.6B``
         ``tmp --model Qwen/Qwen3-0.6B --question "How is indexing done?"``
+        ``tmp --question "How is indexing done?" --k 10``
     """
     import asyncio
 
-    asyncio.run(_tmp(model, question))
+    asyncio.run(_tmp(model, question, k))
 
 
 async def _tmp(
     model: str = "Qwen/Qwen3-0.6B",
     question: str = "",
+    k: int = 5,
 ) -> None:
     """Run initial indexing, answer one question, then watch for changes."""
     from pathlib import Path
@@ -74,7 +81,7 @@ async def _tmp(
     from rag_against_the_machine.indexing.pipeline import run_pipeline
     from rag_against_the_machine.storage.db import Store
 
-    source_root = Path("data/raw/gns3util")
+    source_root = Path("data/raw/")
     project_root = Path.cwd()
 
     store = Store(Path("data/output/stuff.db"))
@@ -130,7 +137,7 @@ async def _tmp(
             question = ""
 
     if question:
-        answer_result = rag_service.answer(question)
+        answer_result = rag_service.answer(question, k=k)
         if isinstance(answer_result, Err):
             answer_result.print_diagnostic()
             return

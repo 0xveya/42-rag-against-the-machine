@@ -23,6 +23,7 @@ from rag_against_the_machine.errors import (
     StorageError,
     catch_bubble,
 )
+from rag_against_the_machine.indexing.chunk_helpers import validate_chunks
 from rag_against_the_machine.indexing.chunker import chunk_source_file
 from rag_against_the_machine.indexing.reader import read_source_file
 from rag_against_the_machine.models.chunk import Chunk
@@ -34,7 +35,7 @@ from rag_against_the_machine.storage.db import (
     Transaction,
 )
 
-_CURRENT_CHUNKER_VERSION = 1
+_CURRENT_CHUNKER_VERSION = 2
 _MAX_FILES_PER_TRANSACTION = 25
 
 
@@ -350,6 +351,24 @@ async def read_and_chunk(
             namespace="indexing::pipeline",
         )
 
+    chunks = chunk_result.unwrap()
+    try:
+        await asyncio.to_thread(validate_chunks, text, chunks, max_chunk_size)
+    except ValueError as error:
+        return Err(
+            FileProcessingError.CHUNK_FAILED,
+            diagnostic=Diagnostic(
+                filename=source_file.stored_path,
+                line_num=1,
+                line_text=source_file.stored_path,
+                col_start=0,
+                col_end=len(source_file.stored_path),
+                help_msg=f"Chunk validation failed: {error}.",
+            ),
+            context_msg="Source-file processing failed",
+            namespace="indexing::pipeline",
+        )
+
     try:
         stat = await asyncio.to_thread(source_file.absolute_path.stat)
 
@@ -381,7 +400,7 @@ async def read_and_chunk(
             max_chunk_size=max_chunk_size,
             chunker_version=_CURRENT_CHUNKER_VERSION,
             indexed_at_ns=time.time_ns(),
-            chunks=chunk_result.unwrap(),
+            chunks=chunks,
         )
     )
 

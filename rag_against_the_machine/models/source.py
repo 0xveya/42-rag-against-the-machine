@@ -2,9 +2,10 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, TypeAlias
+from typing import TypeAlias
 
-FileType: TypeAlias = Literal["python", "markdown", "text"]
+# Canonical language names come from the indexing language registry.
+FileType: TypeAlias = str
 
 
 @dataclass(frozen=True, slots=True)
