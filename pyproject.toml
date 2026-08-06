@@ -34,7 +34,11 @@ rag_against_the_machine = "rag_against_the_machine.main:main"
 requires = ["setuptools>=80"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+package-dir = { "" = "src" }
+
 [tool.setuptools.packages.find]
+where = ["src"]
 include = ["rag_against_the_machine*"]
 exclude = ["tests*"]
 
