@@ -25,3 +25,4 @@ https://fastapi.tiangolo.com/
 https://fastapi.tiangolo.com/advanced/websockets/
 https://huggingface.co/docs/transformers/index
 https://www.sqlitetutorial.net/sqlite-trigger/
+https://docs.python.org/3/library/multiprocessing.html

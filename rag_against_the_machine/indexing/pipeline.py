@@ -7,8 +7,9 @@ import hashlib
 import math
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass
+from itertools import repeat
 from pathlib import Path
 from typing import cast
 
@@ -39,6 +40,8 @@ from rag_against_the_machine.storage.db import (
 _CURRENT_CHUNKER_VERSION = 2
 _MAX_FILES_PER_TRANSACTION = 250
 _MAX_PROCESSING_WORKERS = 64
+_MULTIPROCESS_FILE_THRESHOLD = 2_000
+_MULTIPROCESS_WORKERS = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,20 +151,27 @@ async def run_pipeline(
 
     file_queue: asyncio.Queue[SourceFile | None] = asyncio.Queue()
 
-    for source_file in files_to_process:
-        await file_queue.put(source_file)
-
-    for _ in range(worker_count):
-        await file_queue.put(None)
-
-    worker_tasks = [
-        asyncio.create_task(worker(file_queue, max_chunk_size))
-        for _ in range(worker_count)
-    ]
+    worker_tasks: list[asyncio.Task[WorkerOutput]] = []
 
     processing_started = time.perf_counter()
     try:
-        worker_outputs = await asyncio.gather(*worker_tasks)
+        if len(files_to_process) > _MULTIPROCESS_FILE_THRESHOLD:
+            results = await asyncio.to_thread(
+                process_files_multiprocess,
+                files_to_process,
+                max_chunk_size,
+            )
+            worker_outputs = [worker_output_from_results(results)]
+        else:
+            for source_file in files_to_process:
+                await file_queue.put(source_file)
+            for _ in range(worker_count):
+                await file_queue.put(None)
+            worker_tasks = [
+                asyncio.create_task(worker(file_queue, max_chunk_size))
+                for _ in range(worker_count)
+            ]
+            worker_outputs = await asyncio.gather(*worker_tasks)
     except asyncio.CancelledError:
         for task in worker_tasks:
             _ = task.cancel()
@@ -285,6 +295,52 @@ def source_needs_reindex(
         return Ok(False)
 
     return Ok(record.content_hash != hash_file(source_file.absolute_path))
+
+
+def process_files_multiprocess(
+    source_files: list[SourceFile],
+    max_chunk_size: int,
+) -> list[Result[ProcessedFile, FileProcessingError]]:
+    """Process complete files in separate processes and preserve diagnostics.
+
+    Returns:
+        One result per source file, including worker-generated diagnostics.
+    """
+    process_count = min(os.cpu_count() or 4, _MULTIPROCESS_WORKERS)
+    with ProcessPoolExecutor(max_workers=process_count) as pool:
+        return list(
+            pool.map(
+                read_and_chunk_sync,
+                source_files,
+                repeat(max_chunk_size),
+                chunksize=8,
+            )
+        )
+
+
+def worker_output_from_results(
+    results: list[Result[ProcessedFile, FileProcessingError]],
+) -> WorkerOutput:
+    """Aggregate process-worker results without losing file diagnostics.
+
+    Returns:
+        The same summary shape used by thread workers.
+    """
+    output = WorkerOutput(
+        processed_files=[],
+        diagnostics=[],
+        files_processed=0,
+        files_skipped=0,
+    )
+    for result in results:
+        if isinstance(result, Ok):
+            output.processed_files.append(result.value)
+            output.files_processed += 1
+        else:
+            if result.diagnostic is not None:
+                output.diagnostics.append(result.diagnostic)
+            output.files_skipped += 1
+    return output
 
 
 async def worker(
@@ -445,7 +501,11 @@ async def read_and_chunk(
     source_file: SourceFile,
     max_chunk_size: int,
 ) -> Result[ProcessedFile, FileProcessingError]:
-    """Async compatibility wrapper for event-driven reindexing."""
+    """Async compatibility wrapper for event-driven reindexing.
+
+    Returns:
+        The processed file or a categorized processing error.
+    """
     return await asyncio.to_thread(
         read_and_chunk_sync,
         source_file,
@@ -506,11 +566,7 @@ def persist_processed_files(
 
 
 def _set_fts_triggers(tx: Transaction, *, enabled: bool) -> None:
-    """Toggle FTS maintenance triggers around a clean bulk import.
-
-    Returns:
-        None. The transaction is modified in place.
-    """
+    """Toggle FTS maintenance triggers around a clean bulk import."""
     trigger_names = (
         "chunks_after_insert",
         "chunks_after_delete",
