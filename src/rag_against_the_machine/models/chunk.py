@@ -14,3 +14,4 @@ class Chunk:
     last_character_index: int
     text: str
     file_type: FileType
+    search_text: str | None = None

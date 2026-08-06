@@ -3,12 +3,23 @@
 from __future__ import annotations
 
 import hashlib
+from typing import cast
 
 from rag_against_the_machine.errors import Diagnostic, Ok, ReadError, Result
 from rag_against_the_machine.indexing.error_helpers import (
-    make_read_error,
+    make_read_error as build_read_error,
 )
 from rag_against_the_machine.models.source import SourceFile
+
+
+def make_read_error(
+    error: ReadError, diagnostic: Diagnostic
+) -> Result[tuple[str, str], ReadError]:
+    """Keep the error helper's generic result type explicit for mypy."""
+    return cast(
+        Result[tuple[str, str], ReadError],
+        build_read_error(error, diagnostic),
+    )
 
 
 def _file_diagnostic(source_file: SourceFile, help_msg: str) -> Diagnostic:
@@ -55,7 +66,6 @@ def read_source_file_with_hash(
     try:
         content = path.read_bytes()
         text = content.decode("utf-8")
-        # Match TextIOWrapper's universal-newline behavior used previously.
         text = text.replace("\\r\\n", "\\n").replace("\\r", "\\n")
         return Ok((text, hashlib.sha256(content).hexdigest()))
 

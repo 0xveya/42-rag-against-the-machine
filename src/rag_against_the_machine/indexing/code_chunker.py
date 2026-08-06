@@ -1,6 +1,8 @@
 """Tree-sitter-backed source-code chunking."""
 
+import re
 from dataclasses import dataclass
+from typing import cast
 
 from tree_sitter import Node, Parser
 
@@ -9,6 +11,7 @@ from rag_against_the_machine.indexing.chunk_helpers import (
     append_range_as_chunks,
     chunk_plain_text,
     include_range_gaps,
+    make_chunk,
 )
 from rag_against_the_machine.indexing.languages.config import (
     LanguageChunkConfig,
@@ -77,10 +80,76 @@ def chunk_code(
         structural_ranges = find_structural_ranges(text, config)
         ranges = include_range_gaps(structural_ranges, len(text))
     except (UnicodeError, ValueError):
-        return chunk_plain_text(source_file, text, max_chunk_size)
+        return cast(
+            Result[list[Chunk], ChunkingError],
+            chunk_plain_text(source_file, text, max_chunk_size),
+        )
+    if config.name == "python" and structural_ranges:
+        return Ok(
+            _chunk_python_structures(
+                source_file,
+                text,
+                structural_ranges,
+                max_chunk_size,
+            )
+        )
     chunks: list[Chunk] = []
     for start, end in ranges:
         append_range_as_chunks(
             chunks, source_file, text, start, end, max_chunk_size
         )
     return Ok(chunks)
+
+
+def _chunk_python_structures(
+    source_file: SourceFile,
+    text: str,
+    ranges: list[tuple[int, int]],
+    max_chunk_size: int,
+) -> list[Chunk]:
+    """Chunk Python definitions with overlap and searchable structure context."""
+    chunks: list[Chunk] = []
+    overlap = min(400, max_chunk_size // 4)
+    for start, end in ranges:
+        structure = text[start:end]
+        header = structure.split("\n", 1)[0][:300]
+        current = start
+        while current < end:
+            chunk_end = min(current + max_chunk_size, end)
+            chunk = make_chunk(source_file, text, current, chunk_end)
+            aliases = _identifier_aliases(chunk.text)
+            search_text = (
+                f"File: {source_file.stored_path}\n"
+                f"Structure: {header}\n"
+                f"Identifier aliases: {aliases}\n\n{chunk.text}"
+            )
+            chunks.append(
+                Chunk(
+                    file_path=chunk.file_path,
+                    first_character_index=chunk.first_character_index,
+                    last_character_index=chunk.last_character_index,
+                    text=chunk.text,
+                    file_type=chunk.file_type,
+                    search_text=search_text,
+                )
+            )
+            if chunk_end == end:
+                break
+            current = max(current + 1, chunk_end - overlap)
+    return chunks
+
+
+def _identifier_aliases(text: str) -> str:
+    """Expand snake_case and CamelCase identifiers for lexical matching."""
+    aliases: list[str] = []
+    for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text):
+        if "_" in token:
+            aliases.extend(
+                part.lower()
+                for part in token.split("_")
+                if len(part) > 1
+            )
+        camel_parts = re.findall(r"[A-Z]?[a-z]+|[A-Z]+(?![a-z])|\d+", token)
+        if len(camel_parts) > 1:
+            aliases.extend(part.lower() for part in camel_parts if len(part) > 1)
+    return " ".join(aliases)

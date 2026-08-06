@@ -103,16 +103,26 @@ def chunk_plain_text(
 
 
 def validate_chunks(
-    text: str, chunks: list[Chunk], max_chunk_size: int
+    text: str,
+    chunks: list[Chunk],
+    max_chunk_size: int,
+    *,
+    require_contiguous: bool = True,
 ) -> None:
-    """Ensure chunks are bounded, ordered, lossless, and source-backed."""
+    """Ensure chunks are bounded, ordered, and source-backed."""
     if max_chunk_size <= 0:
         raise ValueError("max_chunk_size must be positive")
+    previous_start = 0
     previous_end = 0
     for index, chunk in enumerate(chunks):
         start, end = chunk.first_character_index, chunk.last_character_index
         if (
-            start != previous_end
+            (require_contiguous and start != previous_end)
+            or (
+                not require_contiguous
+                and index > 0
+                and start < previous_start
+            )
             or start < 0
             or end <= start
             or end > len(text)
@@ -124,8 +134,9 @@ def validate_chunks(
             raise ValueError(f"Chunk {index} exceeds max_chunk_size")
         if chunk.text != text[start:end]:
             raise ValueError(f"Chunk {index} text does not match source range")
+        previous_start = start
         previous_end = end
-    if chunks and previous_end != len(text):
+    if require_contiguous and chunks and previous_end != len(text):
         raise ValueError("Chunks do not cover the complete source")
     if not chunks and text:
         raise ValueError("Non-empty source produced no chunks")

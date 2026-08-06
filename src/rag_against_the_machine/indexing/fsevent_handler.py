@@ -2,6 +2,7 @@
 
 import asyncio
 from pathlib import Path
+from typing import cast
 
 from rag_against_the_machine.errors import (
     Err,
@@ -117,7 +118,7 @@ def handle_ext(suffix: str) -> FileType:
     code_type = file_type_for_extension(extension)
     if code_type is None:
         raise ValueError(f"Unsupported source suffix: {suffix}")
-    return code_type
+    return cast(FileType, code_type)
 
 
 def stored_path(path: Path) -> str:
@@ -190,5 +191,7 @@ def handle_file_deletion(
                 return Ok(True)
             case Nothing():
                 return Ok(False)
+            case _:
+                return Ok(False)
 
-    return store.with_tx(operation)
+    return cast(Result[bool, StorageError], store.with_tx(operation))

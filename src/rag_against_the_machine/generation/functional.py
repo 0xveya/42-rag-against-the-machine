@@ -133,7 +133,7 @@ def make_transformers_answers(
     def replace_model_with_cpu() -> None:
         nonlocal model, device_map
         old_model = model
-        del model
+        model = None
         del old_model
         gc.collect()
         clear_cuda_cache()

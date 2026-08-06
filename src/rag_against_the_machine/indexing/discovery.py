@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from typing import cast
 
 from rag_against_the_machine.errors import (
     Diagnostic,
@@ -10,7 +11,7 @@ from rag_against_the_machine.errors import (
     Result,
 )
 from rag_against_the_machine.indexing.error_helpers import (
-    make_discovery_error,
+    make_discovery_error as build_discovery_error,
 )
 from rag_against_the_machine.indexing.languages.registry import (
     file_type_for_extension,
@@ -20,6 +21,17 @@ from rag_against_the_machine.models.source import (
     FileType,
     SourceFile,
 )
+
+
+def make_discovery_error(
+    error: DiscoveryError, diagnostic: Diagnostic
+) -> Result[list[SourceFile], DiscoveryError]:
+    """Keep the error helper's generic result type explicit for mypy."""
+    return cast(
+        Result[list[SourceFile], DiscoveryError],
+        build_discovery_error(error, diagnostic),
+    )
+
 
 _DOCUMENT_SUFFIX_TYPES: dict[str, FileType] = {
     ".md": "markdown",

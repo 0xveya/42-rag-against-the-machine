@@ -85,7 +85,16 @@ reportMissingTypeStubs = false
 python_version = "3.10"
 files = ["src/rag_against_the_machine", "tests"]
 mypy_path = "src"
-exclude = ["^build/", "^dist/", "^src/.*\\.egg-info/"]
+exclude = [
+    "^build/",
+    "^dist/",
+    "^data/",
+    "^tests/",
+    "^\\.venv/",
+    "^src/.*\\.egg-info/",
+    "^src/__init__\\.py$",
+    "^src/__main__\\.py$",
+]
 warn_return_any = true
 warn_unused_configs = true
 warn_unused_ignores = true
@@ -94,6 +103,7 @@ disallow_untyped_defs = true
 check_untyped_defs = true
 show_error_codes = true
 pretty = true
+namespace_packages = false
 
 [tool.ty.environment]
 root = ["./src"]

@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     source_file_id INTEGER NOT NULL,
     chunk_index INTEGER NOT NULL,
     text TEXT NOT NULL,
+    search_text TEXT NOT NULL,
     start_character INTEGER NOT NULL,
     end_character INTEGER NOT NULL,
     created_at_ns INTEGER NOT NULL,
@@ -30,7 +31,7 @@ CREATE TABLE IF NOT EXISTS chunks (
 CREATE INDEX IF NOT EXISTS idx_chunks_source_file_id ON chunks(source_file_id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
-    text,
+    search_text,
     source_file_id UNINDEXED,
     content = 'chunks',
     content_rowid = 'id',
@@ -45,13 +46,13 @@ BEGIN
 INSERT INTO
     chunks_fts (
         rowid,
-        text,
+        search_text,
         source_file_id
     )
 VALUES
     (
         new.id,
-        new.text,
+        new.search_text,
         new.source_file_id
     );
 
@@ -65,14 +66,14 @@ INSERT INTO
     chunks_fts (
         chunks_fts,
         rowid,
-        text,
+        search_text,
         source_file_id
     )
 VALUES
     (
         'delete',
         old.id,
-        old.text,
+        old.search_text,
         old.source_file_id
     );
 
@@ -87,27 +88,27 @@ INSERT INTO
     chunks_fts (
         chunks_fts,
         rowid,
-        text,
+        search_text,
         source_file_id
     )
 VALUES
     (
         'delete',
         old.id,
-        old.text,
+        old.search_text,
         old.source_file_id
     );
 
 INSERT INTO
     chunks_fts (
         rowid,
-        text,
+        search_text,
         source_file_id
     )
 VALUES
     (
         new.id,
-        new.text,
+        new.search_text,
         new.source_file_id
     );
 

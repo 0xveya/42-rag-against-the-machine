@@ -14,6 +14,7 @@ from typing import (
     ParamSpec,
     TypeAlias,
     TypeVar,
+    cast,
 )
 
 
@@ -149,6 +150,8 @@ class GenerationError(Enum):
 
 E = TypeVar("E", bound=Enum)
 T = TypeVar("T")
+R = TypeVar("R")
+P = ParamSpec("P")
 
 
 @dataclass(frozen=True)
@@ -172,18 +175,19 @@ class BubbleUpError(Exception):
         self.err_payload = err_payload
 
 
-def catch_bubble(func: Callable[..., Any]) -> Callable[..., Any]:
+def catch_bubble(func: Callable[P, R]) -> Callable[P, R]:
     """Decorate a function to convert bubbled errors into return values.
 
     Returns:
         A wrapper that catches and returns bubbled error payloads.
     """
 
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
+    @wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         try:
             return func(*args, **kwargs)
-        except BubbleUpError as b:
-            return b.err_payload
+        except BubbleUpError as error:
+            return cast(R, error.err_payload)
 
     return wrapper
 
@@ -287,8 +291,6 @@ class Err(Generic[E]):
 
 
 Result: TypeAlias = Ok[T] | Err[E]
-
-P = ParamSpec("P")
 
 
 class BubbleUpNothing(Exception):

@@ -11,11 +11,6 @@ from typing import Any
 from rag_against_the_machine.errors import Err, Nothing, Option, Some
 
 
-# Set to True while profiling indexing locally. Timing is always sent to
-# stderr so stdout remains safe for machine-readable command output.
-DEBUG_INDEXING = False
-
-
 @dataclass(frozen=True)
 class IndexOptions:
     """Arguments for the index command."""
@@ -125,7 +120,6 @@ def index(
 ) -> None:
     """Index source files into SQLite."""
     import asyncio
-    import time
 
     from rag_against_the_machine.indexing.discovery import discover_files
     from rag_against_the_machine.indexing.pipeline import run_pipeline
@@ -143,19 +137,11 @@ def index(
     if isinstance(discovered, Err):
         discovered.print_diagnostic()
         return
-    started = time.perf_counter()
     result = asyncio.run(run_pipeline(discovered.value, max_chunk_size, store))
-    if DEBUG_INDEXING:
-        print(
-            f"Indexing took {time.perf_counter() - started:.3f}s",
-            file=sys.stderr,
-        )
     if isinstance(result, Err):
         result.print_diagnostic()
         return
     _ = result.value
-    # Keep stdout machine-readable for commands that emit JSON.  Indexing
-    # diagnostics belong on stderr, as required by the evaluation scripts.
     print(
         f"Ingestion complete! Indices saved under {Path(database_path).parent}/",
         file=sys.stderr,
@@ -319,36 +305,44 @@ def evaluate(student_search_results_path: str, dataset_path: str) -> None:
     results = results_result.value
     dataset = dataset_result.value
     expected = {
-        question.question_id: {
-            (
-                source.file_path,
-                source.first_character_index,
-                source.last_character_index,
-            )
-            for source in question.sources
-        }
+        question.question_id: question.sources
         for question in dataset.rag_questions
         if hasattr(question, "sources")
     }
-    total = len(expected)
-    hits = 0
+    recalls: list[float] = []
     for result in results.search_results:
-        wanted = expected.get(result.question_id, set())
-        found = {
-            (
-                source.file_path,
-                source.first_character_index,
-                source.last_character_index,
-            )
-            for source in result.retrieved_sources
-        }
-        if wanted and wanted & found:
-            hits += 1
+        wanted = expected.get(result.question_id, [])
+        if not wanted:
+            continue
+        found_count = sum(
+            any(_source_overlaps(actual, target) for actual in result.retrieved_sources)
+            for target in wanted
+        )
+        recalls.append(found_count / len(wanted))
     print(
         json.dumps(
-            {"recall_at_k": hits / total if total else 0.0, "k": results.k}
+            {
+                "recall_at_k": sum(recalls) / len(recalls) if recalls else 0.0,
+                "k": results.k,
+            }
         )
     )
+
+
+def _source_overlaps(actual: Any, expected: Any) -> bool:
+    """Apply the moulinette's same-file and 0.05 IoU match rule."""
+    if actual.file_path != expected.file_path:
+        return False
+    actual_start = int(actual.first_character_index)
+    actual_end = int(actual.last_character_index)
+    expected_start = int(expected.first_character_index)
+    expected_end = int(expected.last_character_index)
+    intersection = max(
+        0,
+        min(actual_end, expected_end) - max(actual_start, expected_start),
+    )
+    union = max(actual_end, expected_end) - min(actual_start, expected_start)
+    return union > 0 and intersection / union >= 0.05
 
 
 def _source(hit: Any) -> Any:

@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import math
 import os
+import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -37,11 +38,19 @@ from rag_against_the_machine.storage.db import (
     Transaction,
 )
 
-_CURRENT_CHUNKER_VERSION = 2
+_CURRENT_CHUNKER_VERSION = 4
 _MAX_FILES_PER_TRANSACTION = 250
 _MAX_PROCESSING_WORKERS = 64
 _MULTIPROCESS_FILE_THRESHOLD = 2_000
 _MULTIPROCESS_WORKERS = 8
+
+DEBUG_INDEXING = False
+
+
+def _debug_timing(message: str) -> None:
+    """Print an indexing timing to stderr when debugging is enabled."""
+    if DEBUG_INDEXING:
+        print(message, file=sys.stderr)
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,7 +135,9 @@ async def run_pipeline(
             files_to_process.append(source_file)
         else:
             files_skipped += 1
-    print(f"[index] state lookup: {time.perf_counter() - lookup_started:.3f}s")
+    _debug_timing(
+        f"[index] state lookup: {time.perf_counter() - lookup_started:.3f}s"
+    )
 
     if not files_to_process:
         return Ok(
@@ -202,18 +213,15 @@ async def run_pipeline(
         diagnostics.extend(output.diagnostics)
         files_skipped += output.files_skipped
 
-    print(
+    _debug_timing(
         f"[index] read + chunk: {time.perf_counter() - processing_started:.3f}s"
     )
     files_persisted = 0
 
     try:
         persistence_started = time.perf_counter()
-        # commit bounded batches so completed work is flushed incrementally.
-        # this avoids one transaction per file without making the whole run
-        # one large all-or-nothing transaction.
         batch_size = persistence_batch_size(len(processed_files))
-        print(f"[index] persistence batch size: {batch_size}")
+        _debug_timing(f"[index] persistence batch size: {batch_size}")
         for batch_start in range(0, len(processed_files), batch_size):
             batch = processed_files[batch_start : batch_start + batch_size]
             clean_import = not stored_by_path
@@ -240,7 +248,7 @@ async def run_pipeline(
     except Exception:
         return Err(PipelineError.DATABASE_FAILED)
 
-    print(
+    _debug_timing(
         "[index] database persistence: "
         f"{time.perf_counter() - persistence_started:.3f}s"
     )
@@ -268,7 +276,10 @@ def source_needs_reindex(
     def lookup(
         tx: Transaction,
     ) -> Result[Option[SourceFileRecord], StorageError]:
-        return tx.queries.get_source_file(source_file.stored_path)
+        return cast(
+            Result[Option[SourceFileRecord], StorageError],
+            tx.queries.get_source_file(source_file.stored_path),
+        )
 
     stored_result = store.with_tx(lookup)
     if isinstance(stored_result, Err):
@@ -450,7 +461,12 @@ def read_and_chunk_sync(
 
     chunks = chunk_result.unwrap()
     try:
-        validate_chunks(text, chunks, max_chunk_size)
+        validate_chunks(
+            text,
+            chunks,
+            max_chunk_size,
+            require_contiguous=source_file.file_type not in {"python", "py"},
+        )
     except ValueError as error:
         return Err(
             FileProcessingError.CHUNK_FAILED,
@@ -562,7 +578,9 @@ def persist_processed_files(
             _set_fts_triggers(tx, enabled=True)
         return Ok(None)
 
-    return store.with_tx(operation)
+    return cast(
+        Result[None, StorageError], store.with_tx(operation)
+    )
 
 
 def _set_fts_triggers(tx: Transaction, *, enabled: bool) -> None:
@@ -582,8 +600,8 @@ def _set_fts_triggers(tx: Transaction, *, enabled: bool) -> None:
         CREATE TRIGGER IF NOT EXISTS chunks_after_insert
         AFTER INSERT ON chunks
         BEGIN
-            INSERT INTO chunks_fts(rowid, text, source_file_id)
-            VALUES (new.id, new.text, new.source_file_id);
+            INSERT INTO chunks_fts(rowid, search_text, source_file_id)
+            VALUES (new.id, new.search_text, new.source_file_id);
         END
         """
     )
@@ -592,8 +610,10 @@ def _set_fts_triggers(tx: Transaction, *, enabled: bool) -> None:
         CREATE TRIGGER IF NOT EXISTS chunks_after_delete
         AFTER DELETE ON chunks
         BEGIN
-            INSERT INTO chunks_fts(chunks_fts, rowid, text, source_file_id)
-            VALUES ('delete', old.id, old.text, old.source_file_id);
+            INSERT INTO chunks_fts(
+                chunks_fts, rowid, search_text, source_file_id
+            )
+            VALUES ('delete', old.id, old.search_text, old.source_file_id);
         END
         """
     )
@@ -602,10 +622,12 @@ def _set_fts_triggers(tx: Transaction, *, enabled: bool) -> None:
         CREATE TRIGGER IF NOT EXISTS chunks_after_update
         AFTER UPDATE ON chunks
         BEGIN
-            INSERT INTO chunks_fts(chunks_fts, rowid, text, source_file_id)
-            VALUES ('delete', old.id, old.text, old.source_file_id);
-            INSERT INTO chunks_fts(rowid, text, source_file_id)
-            VALUES (new.id, new.text, new.source_file_id);
+            INSERT INTO chunks_fts(
+                chunks_fts, rowid, search_text, source_file_id
+            )
+            VALUES ('delete', old.id, old.search_text, old.source_file_id);
+            INSERT INTO chunks_fts(rowid, search_text, source_file_id)
+            VALUES (new.id, new.search_text, new.source_file_id);
         END
         """
     )
@@ -642,6 +664,7 @@ def persist_processed_file(
         ChunkInsert(
             chunk_index=chunk_index,
             text=chunk.text,
+            search_text=chunk.search_text or chunk.text,
             start_character=chunk.first_character_index,
             end_character=chunk.last_character_index,
             created_at_ns=created_at_ns,
