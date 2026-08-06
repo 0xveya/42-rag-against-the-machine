@@ -150,4 +150,14 @@ def _search(
     query = prepare_fts_query(question)
     if not query:
         return Ok([])
-    return store.read(lambda queries: queries.search_chunks(query, limit))
+    # Code questions frequently name the module or class rather than words
+    # present in the implementation.  Let storage use those terms to boost
+    # matching source paths as well as chunk text.
+    path_terms = tuple(
+        token
+        for token in query.split('"')
+        if token and token not in {" OR "}
+    )
+    return store.read(
+        lambda queries: queries.search_chunks(query, limit, path_terms)
+    )

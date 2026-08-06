@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -10,16 +11,28 @@ from typing import Any
 from rag_against_the_machine.errors import Err, Nothing, Option, Some
 
 
+# Set to True while profiling indexing locally. Timing is always sent to
+# stderr so stdout remains safe for machine-readable command output.
+DEBUG_INDEXING = False
+
+
 @dataclass(frozen=True)
 class IndexOptions:
     """Arguments for the index command."""
 
-    source_path: str = field(metadata={"help": "Directory to ingest."})
-    project_path: str = field(
-        metadata={"help": "Project root for stored paths."}
+    source_path: str = field(
+        default="data/raw", metadata={"help": "Directory to ingest."}
     )
-    database_path: str = field(metadata={"help": "SQLite index path."})
-    max_chunk_size: int = field(metadata={"help": "Maximum chunk size."})
+    project_path: str = field(
+        default=".", metadata={"help": "Project root for stored paths."}
+    )
+    database_path: str = field(
+        default="data/processed/index.db",
+        metadata={"help": "SQLite index path."},
+    )
+    max_chunk_size: int = field(
+        default=2000, metadata={"help": "Maximum chunk size."}
+    )
 
 
 @dataclass(frozen=True)
@@ -29,8 +42,11 @@ class SearchOptions:
     query: str = field(
         metadata={"help": "Question to search.", "positional": True}
     )
-    database_path: str = field(metadata={"help": "SQLite index path."})
-    k: int = field(metadata={"help": "Number of sources."})
+    database_path: str = field(
+        default="data/processed/index.db",
+        metadata={"help": "SQLite index path."},
+    )
+    k: int = field(default=10, metadata={"help": "Number of sources."})
 
 
 @dataclass(frozen=True)
@@ -38,9 +54,15 @@ class SearchDatasetOptions:
     """Arguments for dataset retrieval."""
 
     dataset_path: str = field(metadata={"help": "RAG dataset JSON path."})
-    database_path: str = field(metadata={"help": "SQLite index path."})
-    k: int = field(metadata={"help": "Number of sources."})
-    save_directory: str = field(metadata={"help": "Output directory."})
+    database_path: str = field(
+        default="data/processed/index.db",
+        metadata={"help": "SQLite index path."},
+    )
+    k: int = field(default=10, metadata={"help": "Number of sources."})
+    save_directory: str = field(
+        default="data/output/search_results",
+        metadata={"help": "Output directory."},
+    )
 
 
 @dataclass(frozen=True)
@@ -50,9 +72,15 @@ class AnswerOptions:
     query: str = field(
         metadata={"help": "Question to answer.", "positional": True}
     )
-    database_path: str = field(metadata={"help": "SQLite index path."})
-    model: str = field(metadata={"help": "Transformers model name."})
-    k: int = field(metadata={"help": "Number of sources."})
+    database_path: str = field(
+        default="data/processed/index.db",
+        metadata={"help": "SQLite index path."},
+    )
+    model: str = field(
+        default="Qwen/Qwen3-0.6B",
+        metadata={"help": "Transformers model name."},
+    )
+    k: int = field(default=10, metadata={"help": "Number of sources."})
 
 
 @dataclass(frozen=True)
@@ -62,10 +90,21 @@ class AnswerDatasetOptions:
     student_search_results_path: str = field(
         metadata={"help": "Search results JSON."}
     )
-    database_path: str = field(metadata={"help": "SQLite index path."})
-    model: str = field(metadata={"help": "Transformers model name."})
-    save_directory: str = field(metadata={"help": "Output directory."})
-    max_new_tokens: int = field(metadata={"help": "Generation token limit."})
+    database_path: str = field(
+        default="data/processed/index.db",
+        metadata={"help": "SQLite index path."},
+    )
+    model: str = field(
+        default="Qwen/Qwen3-0.6B",
+        metadata={"help": "Transformers model name."},
+    )
+    save_directory: str = field(
+        default="data/output/search_results_and_answer",
+        metadata={"help": "Output directory."},
+    )
+    max_new_tokens: int = field(
+        default=256, metadata={"help": "Generation token limit."}
+    )
 
 
 @dataclass(frozen=True)
@@ -79,13 +118,14 @@ class EvaluateOptions:
 
 
 def index(
-    source_path: str,
-    project_path: str,
-    database_path: str,
-    max_chunk_size: int,
+    source_path: str = "data/raw",
+    project_path: str = ".",
+    database_path: str = "data/processed/index.db",
+    max_chunk_size: int = 2000,
 ) -> None:
     """Index source files into SQLite."""
     import asyncio
+    import time
 
     from rag_against_the_machine.indexing.discovery import discover_files
     from rag_against_the_machine.indexing.pipeline import run_pipeline
@@ -103,17 +143,30 @@ def index(
     if isinstance(discovered, Err):
         discovered.print_diagnostic()
         return
+    started = time.perf_counter()
     result = asyncio.run(run_pipeline(discovered.value, max_chunk_size, store))
+    if DEBUG_INDEXING:
+        print(
+            f"Indexing took {time.perf_counter() - started:.3f}s",
+            file=sys.stderr,
+        )
     if isinstance(result, Err):
         result.print_diagnostic()
         return
-    output = result.value
+    _ = result.value
+    # Keep stdout machine-readable for commands that emit JSON.  Indexing
+    # diagnostics belong on stderr, as required by the evaluation scripts.
     print(
-        f"Indexed {output.files_processed} files; skipped {output.files_skipped}."
+        f"Ingestion complete! Indices saved under {Path(database_path).parent}/",
+        file=sys.stderr,
     )
 
 
-def search(query: str, database_path: str, k: int) -> None:
+def search(
+    query: str,
+    database_path: str = "data/processed/index.db",
+    k: int = 10,
+) -> None:
     """Print top-k sources for a query as JSON."""
     from rag_against_the_machine.models.rag import MinimalSearchResults
     from rag_against_the_machine.rag.service import retrieve_hits
@@ -133,9 +186,9 @@ def search(query: str, database_path: str, k: int) -> None:
 
 def search_dataset(
     dataset_path: str,
-    database_path: str,
-    k: int,
-    save_directory: str,
+    database_path: str = "data/processed/index.db",
+    k: int = 10,
+    save_directory: str = "data/output/search_results",
 ) -> None:
     """Search every question in a RAG dataset and save JSON."""
     from rag_against_the_machine.models.rag import (
@@ -168,18 +221,20 @@ def search_dataset(
         )
     _save(
         Path(save_directory),
-        "search_results.json",
+        Path(dataset_path).name,
         StudentSearchResults(search_results=results, k=k),
+        label="student_search_results",
     )
 
 
-def answer(query: str, database_path: str, model: str, k: int) -> None:
+def answer(
+    query: str,
+    database_path: str = "data/processed/index.db",
+    model: str = "Qwen/Qwen3-0.6B",
+    k: int = 10,
+) -> None:
     """Print one grounded answer as JSON."""
     from rag_against_the_machine.generation import create_answer_function
-    from rag_against_the_machine.models.rag import (
-        MinimalAnswer,
-        UnansweredQuestion,
-    )
     from rag_against_the_machine.rag import RagService
     from rag_against_the_machine.storage.db import Store
 
@@ -198,10 +253,10 @@ def answer(query: str, database_path: str, model: str, k: int) -> None:
 
 def answer_dataset(
     student_search_results_path: str,
-    database_path: str,
-    model: str,
-    save_directory: str,
-    max_new_tokens: int,
+    database_path: str = "data/processed/index.db",
+    model: str = "Qwen/Qwen3-0.6B",
+    save_directory: str = "data/output/search_results_and_answer",
+    max_new_tokens: int = 256,
 ) -> None:
     """Generate answers for search-results JSON and save JSON."""
     from rag_against_the_machine.generation import create_answer_function
@@ -240,8 +295,9 @@ def answer_dataset(
             answers.append(result.value)
     _save(
         Path(save_directory),
-        "answers.json",
+        Path(student_search_results_path).name,
         StudentSearchResultsAndAnswer(search_results=answers, k=source.k),
+        label="student_search_results_and_answer",
     )
 
 
@@ -315,12 +371,15 @@ def _load_model(path: Path, model_type: type[Any]) -> Option[Any]:
         return Nothing()
 
 
-def _save(directory: Path, filename: str, model: Any) -> None:
+def _save(
+    directory: Path, filename: str, model: Any, label: str = "output"
+) -> None:
+    """Write a validated model and report the exact evaluator-facing path."""
     try:
         directory.mkdir(parents=True, exist_ok=True)
         _ = (directory / filename).write_text(
             model.model_dump_json(indent=2), encoding="utf-8"
         )
-        print(f"Wrote {directory / filename}")
+        print(f"Saved {label} to {directory / filename}")
     except (OSError, TypeError) as error:
         print(f"Could not write output: {error}")

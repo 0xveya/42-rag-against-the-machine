@@ -117,6 +117,7 @@ class Queries:
         self,
         query: str,
         limit: int,
+        path_terms: tuple[str, ...] = (),
     ) -> Result[list[SearchHit], StorageError]:
         """Return the highest-ranking chunks for an FTS5 query."""
         if limit <= 0:
@@ -146,6 +147,9 @@ class Queries:
                     (query, limit),
                 ).fetchall(),
             )
+            lexical_ids = {cast(int, row["chunk_id"]) for row in rows}
+            path_rows = self._path_matches(path_terms, query, lexical_ids)
+            rows = path_rows + rows
         except sqlite3.Error as error:
             return _query_error("search chunks", error)
 
@@ -161,7 +165,56 @@ class Queries:
             for row in rows
         ]
 
-        return Ok(hits)
+        unique_hits: dict[int, SearchHit] = {}
+        for hit in hits:
+            unique_hits.setdefault(hit.chunk_id, hit)
+        return Ok(list(unique_hits.values())[:limit])
+
+    def _path_matches(
+        self,
+        path_terms: tuple[str, ...],
+        query: str,
+        excluded_ids: set[int],
+    ) -> list[sqlite3.Row]:
+        """Find chunks from files whose names match query identifiers."""
+        useful_terms = tuple(
+            term.lower()
+            for term in path_terms
+            if len(term) >= 5 and term.lower() not in _PATH_STOPWORDS
+        )
+        if not useful_terms:
+            return []
+        clauses = " OR ".join("lower(path) LIKE ?" for _ in useful_terms)
+        paths = tuple(f"%{term}%" for term in useful_terms)
+        file_rows = self.conn.execute(
+            f"SELECT id, path FROM source_files WHERE {clauses} LIMIT 80",
+            paths,
+        ).fetchall()
+        if not file_rows:
+            return []
+        file_ids = tuple(cast(int, row["id"]) for row in file_rows)
+        placeholders = ",".join("?" for _ in file_ids)
+        rows = self.conn.execute(
+            f"""
+            SELECT chunks.id AS chunk_id, source_files.path AS file_path,
+                   chunks.start_character, chunks.end_character,
+                   chunks.text, 0.0 AS score
+            FROM chunks JOIN source_files
+              ON source_files.id = chunks.source_file_id
+            WHERE source_files.id IN ({placeholders})
+            """,
+            file_ids,
+        ).fetchall()
+        query_terms = tuple(term.strip('"').lower() for term in path_terms)
+        ranked = sorted(
+            (row for row in rows if cast(int, row["chunk_id"]) not in excluded_ids),
+            key=lambda row: (
+                -sum(term in cast(str, row["file_path"]).lower() for term in useful_terms),
+                -sum(term in cast(str, row["text"]).lower() for term in query_terms),
+                cast(int, row["chunk_id"]),
+            ),
+        )
+        return ranked[: max(20, len(useful_terms) * 4)]
 
     def upsert_source_file(
         self,
@@ -532,6 +585,11 @@ def _query_error(operation: str, error: sqlite3.Error) -> Err[StorageError]:
 
 # normally i would use am embdded migrations dir to handle the db but
 # with the scope of this projects its okay to just have the schma as a string
+_PATH_STOPWORDS = {
+    "about", "after", "class", "does", "false", "from", "given", "which",
+    "where", "what", "when", "with", "would", "value", "values",
+}
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS source_files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

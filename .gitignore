@@ -15,6 +15,9 @@ data/raw/
 data/processed/
 data/moulinette/
 data/datasets_public/
+data/datasets/
+data/output/
+data/.subject-cache/
 
 # Downloaded subject/repository archives stay local.
 data/*.zip
