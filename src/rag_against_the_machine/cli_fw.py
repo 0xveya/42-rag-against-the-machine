@@ -920,4 +920,7 @@ def _find_best_string_match(
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nStopped. Goodbye!")

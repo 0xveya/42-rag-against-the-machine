@@ -180,7 +180,7 @@ def run_with_fire() -> None:
     )
 
 
-def main() -> None:
+def _run_cli() -> None:
     """Render framework help and delegate command execution to Python Fire.
 
     Raises:
@@ -191,11 +191,19 @@ def main() -> None:
         return
     if not validate_framework_arguments(argv):
         raise SystemExit(2)
+    run_with_fire()
+
+
+def main() -> None:
+    """Run the complete CLI lifecycle with graceful Ctrl-C handling."""
     try:
-        run_with_fire()
+        _run_cli()
     except KeyboardInterrupt:
         print("\nServer stopped. Goodbye!")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nServer stopped. Goodbye!")

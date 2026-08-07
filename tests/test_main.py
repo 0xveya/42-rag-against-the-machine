@@ -86,6 +86,26 @@ def test_keyboard_interrupt_exits_cleanly(monkeypatch, capsys):
     assert "Server stopped. Goodbye!" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize(
+    "interrupted_step",
+    ["render_framework_help", "validate_framework_arguments"],
+)
+def test_keyboard_interrupt_during_cli_setup_exits_cleanly(
+    monkeypatch, capsys, interrupted_step
+):
+    """Ctrl-C is handled even before command execution reaches Fire."""
+    monkeypatch.setattr(main.sys, "argv", ["rag_against_the_machine", "serve"])
+
+    def interrupt(_argv):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(main, interrupted_step, interrupt)
+
+    main.main()
+
+    assert "Server stopped. Goodbye!" in capsys.readouterr().out
+
+
 def test_invalid_subcommand_option_shows_the_complete_command_line(
     monkeypatch, capsys
 ):
