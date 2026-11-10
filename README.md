@@ -531,6 +531,18 @@ health, `/api/repositories` manages local corpora, and `/ws` streams retrieval
 status, sources, generated token fragments, completion, and errors. This is a
 local development interface, not a hardened public service.
 
+### Repository explorer
+
+Run `make demo`, then open `http://127.0.0.1:8000/explore`. Clone and select a
+repository, inspect ranked FTS excerpts and the source prompt, or generate a
+local answer. The Database tab shows file/chunk counts and removes only the
+selected repository's index. Cloned files remain on disk.
+
+Demo repositories and SQLite state live in `data/demo/`, separate from the
+subject corpus and evaluation index. Use `with-env { PORT: "8001" } { make demo }` in Nushell to
+choose another port. The printable A4 one-pager and editable PhotoCraft source
+are in `showcase/one-pager/`.
+
 ## Testing
 
 ```bash

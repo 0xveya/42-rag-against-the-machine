@@ -59,6 +59,8 @@ class QuestionRequest(BaseModel):
     repository: str
     question: str = Field(min_length=1)
     k: int = Field(default=5, ge=1, le=50)
+    inspect: bool = False
+    generate: bool = True
 
 
 class RetrievedSource(BaseModel):
@@ -68,6 +70,41 @@ class RetrievedSource(BaseModel):
     first_character_index: int
     last_character_index: int
     text: str = Field(exclude=True)
+    score: float = Field(default=0.0, exclude=True)
+
+
+class IndexStatus(BaseModel):
+    """Counts for a selectable repository's database records."""
+
+    repository: str
+    files: int
+    chunks: int
+
+
+class InspectedSource(BaseModel):
+    """Exact indexed text and its original SQLite BM25 score."""
+
+    file_path: str
+    first_character_index: int
+    last_character_index: int
+    text: str
+    score: float
+
+
+class PromptMessage(BaseModel):
+    """One message passed to the model's chat template."""
+
+    role: str
+    content: str
+
+
+class InspectionMessage(BaseModel):
+    """Expose the actual retrieval and source prompt for the explorer."""
+
+    type: Literal["inspection"] = "inspection"
+    query: str
+    sources: list[InspectedSource]
+    messages: list[PromptMessage]
 
 
 class StatusMessage(BaseModel):

@@ -17,6 +17,7 @@ data/moulinette/
 data/datasets_public/
 data/datasets/
 data/output/
+data/demo/
 data/.subject-cache/
 
 # Downloaded subject/repository archives stay local.

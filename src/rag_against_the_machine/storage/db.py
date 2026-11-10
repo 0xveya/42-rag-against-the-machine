@@ -120,6 +120,7 @@ class Queries:
         limit: int,
         path_terms: tuple[str, ...] = (),
         identifier_terms: tuple[str, ...] = (),
+        path_prefix: str = "",
     ) -> Result[list[SearchHit], StorageError]:
         """Return the highest-ranking chunks for an FTS5 query."""
         if limit <= 0:
@@ -143,27 +144,22 @@ class Queries:
                     JOIN source_files
                         ON source_files.id = chunks.source_file_id
                     WHERE chunks_fts MATCH ?
+                      AND substr(source_files.path, 1, ?) = ?
                     ORDER BY score ASC
                     LIMIT ?
                     """,
-                    (query, limit),
+                    (query, len(path_prefix), path_prefix, limit),
                 ).fetchall(),
             )
             lexical_ids = {cast(int, row["chunk_id"]) for row in rows}
             path_rows = self._path_matches(
-                path_terms, identifier_terms, query, lexical_ids
+                path_terms, identifier_terms, query, lexical_ids, path_prefix
             )
             is_code_path = bool(path_rows) and "/vllm-0.10.1/vllm/" in cast(
                 str, path_rows[0]["file_path"]
             )
             if is_code_path:
-                rows = (
-                    rows[:4]
-                    + path_rows[:1]
-                    + rows[4:8]
-                    + path_rows[1:2]
-                    + rows[8:]
-                )
+                rows = rows[:4] + path_rows[:1] + rows[4:8] + path_rows[1:2] + rows[8:]
             else:
                 rows = rows[:9] + path_rows[:1] + rows[9:]
         except sqlite3.Error as error:
@@ -192,13 +188,15 @@ class Queries:
         identifier_terms: tuple[str, ...],
         query: str,
         excluded_ids: set[int],
+        path_prefix: str = "",
     ) -> list[sqlite3.Row]:
         """Rank chunks from a file whose stem exactly matches query terms."""
         useful_terms = {term.lower() for term in path_terms if len(term) >= 3}
         if not useful_terms:
             return []
         all_files = self.conn.execute(
-            "SELECT id, path FROM source_files"
+            "SELECT id, path FROM source_files WHERE substr(path, 1, ?) = ?",
+            (len(path_prefix), path_prefix),
         ).fetchall()
         matched_files: list[tuple[int, int, sqlite3.Row]] = []
         for row in all_files:
@@ -253,6 +251,31 @@ class Queries:
             )
         )
         return selected[:4]
+
+    def index_counts(self, prefix: str) -> Result[tuple[int, int], StorageError]:
+        """Count indexed files and chunks within one repository."""
+        try:
+            row = self.conn.execute(
+                """SELECT count(DISTINCT source_files.id), count(chunks.id)
+                FROM source_files LEFT JOIN chunks
+                    ON chunks.source_file_id = source_files.id
+                WHERE substr(source_files.path, 1, ?) = ?""",
+                (len(prefix), prefix),
+            ).fetchone()
+        except sqlite3.Error as error:
+            return _query_error("count repository index", error)
+        return Ok((int(row[0]), int(row[1])))
+
+    def delete_index(self, prefix: str) -> Result[None, StorageError]:
+        """Remove a repository's index through the normal cascade triggers."""
+        try:
+            self.conn.execute(
+                "DELETE FROM source_files WHERE substr(path, 1, ?) = ?",
+                (len(prefix), prefix),
+            )
+        except sqlite3.Error as error:
+            return _query_error("remove repository index", error)
+        return Ok(None)
 
     def upsert_source_file(
         self,

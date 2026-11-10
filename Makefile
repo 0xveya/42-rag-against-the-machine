@@ -30,7 +30,7 @@ MYPY_FLAGS := --warn-return-any --warn-unused-ignores --ignore-missing-imports -
 .PHONY: install run debug serve clean lint lint-strict test index search \
 	search-dataset answer answer-dataset evaluate subject-download subject-setup \
 	subject-index subject-search moulinette moulinette-compare subject-eval \
-	subject-all benchmark-repos benchmark-index add-repo
+	subject-all benchmark-repos benchmark-index add-repo demo
 
 install:
 	$(UV) sync --dev
@@ -43,6 +43,12 @@ debug:
 
 serve:
 	$(UV) run python -m src serve --port $${PORT:-8000} --model "$(MODEL)" $(ARGS)
+
+demo:
+	@mkdir -p data/demo/repos
+	@echo "Explorer: http://127.0.0.1:$${PORT:-8000}/explore"
+	$(UV) run python -m src serve --port $${PORT:-8000} --model "$(MODEL)" \
+		--raw_directory data/demo/repos --database_path data/demo/index.db $(ARGS)
 
 add-repo:
 	@test -n "$(REPO_URL)" || { echo "Usage: make add-repo REPO_URL=https://...git [REPO_NAME=name]" >&2; exit 2; }

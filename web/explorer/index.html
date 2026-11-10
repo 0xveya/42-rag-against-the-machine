@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RAG explorer</title>
+    <link rel="stylesheet" href="/explorer/style.css" />
+    <script src="/explorer/highlight.min.js" defer></script>
+    <script src="/explorer/app.js" defer></script>
+  </head>
+  <body>
+    <header>
+      <h1>RAG Against the Machine</h1>
+      <a href="/eval.html">CLI &amp; evaluation</a>
+    </header>
+    <div class="app">
+      <aside>
+        <label for="repository">Repository</label>
+        <select id="repository" disabled>
+          <option>Loading…</option>
+        </select>
+        <p id="counts" class="muted">Reading index…</p>
+        <div class="actions">
+          <button id="reindex" disabled>Reindex</button
+          ><button id="refresh">Refresh</button>
+        </div>
+        <details id="clone-details">
+          <summary>Clone a repository</summary>
+          <form id="clone-form">
+            <label for="url">HTTPS Git URL</label
+            ><input
+              id="url"
+              type="url"
+              placeholder="https://github.com/owner/repo"
+              required
+            />
+            <label for="name"
+              >Folder name <span class="muted">(optional)</span></label
+            ><input id="name" pattern="[A-Za-z0-9._-]*" autocomplete="off" />
+            <button id="clone" type="submit">Clone &amp; index</button>
+          </form>
+        </details>
+        <p class="aside-note">
+          A learning project. For practical coding work, use an agent with file
+          and search tools.
+        </p>
+      </aside>
+      <main>
+        <form id="question-form">
+          <label for="question">Question</label>
+          <textarea
+            id="question"
+            rows="3"
+            placeholder="How are changed files reindexed?"
+            required
+          ></textarea>
+          <div class="query-controls">
+            <label for="k"
+              >Sources
+              <input id="k" type="number" min="1" max="50" value="5" required
+            /></label>
+            <button id="search" class="primary" type="submit" disabled>
+              Search index
+            </button>
+            <button id="generate" type="button" disabled>
+              Generate answer
+            </button>
+          </div>
+        </form>
+        <output id="status" role="status" aria-live="polite"
+          >Connecting…</output
+        >
+        <nav class="tabs" aria-label="Explorer views">
+          <button data-tab="results" aria-current="page">
+            Results <span id="result-count"></span>
+          </button>
+          <button data-tab="prompt">Prompt</button
+          ><button data-tab="answer">Answer</button
+          ><button data-tab="database">Database</button>
+        </nav>
+        <section id="results" class="view">
+          <div id="empty" class="empty">
+            Select a repository, index it, then search its code and
+            documentation.
+          </div>
+          <div id="retrieval" hidden>
+            <div class="fts">
+              <span>FTS query</span><code id="fts-query"></code>
+            </div>
+            <p class="score-note">
+              SQLite BM25: lower scores rank higher. Path matching can also
+              affect result order.
+            </p>
+            <div class="results-grid">
+              <ol id="sources" aria-label="Ranked sources"></ol>
+              <section class="source-view" aria-label="Source excerpt">
+                <div class="source-header">
+                  <div>
+                    <h2 id="source-path"></h2>
+                    <p id="source-range" class="muted"></p>
+                  </div>
+                  <button id="copy-source" disabled>Copy</button>
+                </div>
+                <pre><code id="source-code"></code></pre>
+              </section>
+            </div>
+          </div>
+        </section>
+        <section id="prompt" class="view" hidden>
+          <p class="muted">
+            Messages before chat-template formatting and token truncation.
+          </p>
+          <div id="messages">
+            <p class="empty">Search to inspect the source prompt.</p>
+          </div>
+        </section>
+        <section id="answer" class="view" hidden>
+          <pre id="answer-text" class="answer-text">
+Generate an answer to see the local model’s output.</pre>
+        </section>
+        <section id="database" class="view" hidden>
+          <h2 id="db-repository">Repository index</h2>
+          <dl class="stats">
+            <div>
+              <dt>Files</dt>
+              <dd id="db-files">0</dd>
+            </div>
+            <div>
+              <dt>Chunks</dt>
+              <dd id="db-chunks">0</dd>
+            </div>
+          </dl>
+          <p>
+            Reindex rebuilds this repository’s records. Removing the index keeps
+            its cloned files. File changes can add records again.
+          </p>
+          <button id="remove-index" disabled>Remove repository index</button>
+        </section>
+      </main>
+    </div>
+    <dialog id="remove-dialog">
+      <form method="dialog">
+        <h2>Remove this repository’s index?</h2>
+        <p id="remove-name"></p>
+        <p>The cloned files will stay on disk.</p>
+        <div class="actions">
+          <button value="cancel">Cancel</button
+          ><button id="confirm-remove" value="remove">Remove index</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>

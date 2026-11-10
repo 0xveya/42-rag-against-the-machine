@@ -104,7 +104,7 @@ async def add_repository(
     if target.exists():
         return Err(
             WebError.REPOSITORY_CLONE_FAILED,
-            context_msg=f"{target.relative_to(ROOT)} already exists",
+            context_msg=f"{target} already exists",
             namespace="server::actions",
         )
 

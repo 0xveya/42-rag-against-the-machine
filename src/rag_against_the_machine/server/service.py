@@ -31,6 +31,7 @@ from rag_against_the_machine.indexing.fsevent_handler import handle_event
 from rag_against_the_machine.indexing.pipeline import run_pipeline
 from rag_against_the_machine.rag.service import retrieve_hits
 from rag_against_the_machine.server.models import (
+    IndexStatus,
     ReindexResponse,
     RepositorySummary,
     RetrievedSource,
@@ -261,8 +262,12 @@ class WebRagService:
         if isinstance(repository_result, Err):
             return repository_result
         repository_path = repository_result.value
+        prefix_result = self._stored_prefix(repository_path)
+        if isinstance(prefix_result, Err):
+            return prefix_result
+        prefix = prefix_result.value
         result = await asyncio.to_thread(
-            retrieve_hits, self.store, question, max(k * 10, k)
+            retrieve_hits, self.store, question, k, prefix
         )
         if isinstance(result, Err):
             return Err(
@@ -270,16 +275,13 @@ class WebRagService:
                 context_msg=result.context_msg or "Retrieval failed",
                 namespace="server::service",
             )
-        prefix_result = self._stored_prefix(repository_path)
-        if isinstance(prefix_result, Err):
-            return prefix_result
-        prefix = prefix_result.value
         sources = [
             RetrievedSource(
                 file_path=hit.file_path,
                 first_character_index=hit.start_character,
                 last_character_index=hit.end_character,
                 text=hit.text,
+                score=hit.score,
             )
             for hit in result.value
             if hit.file_path.startswith(prefix)
@@ -291,6 +293,50 @@ class WebRagService:
             returned=len(sources),
         )
         return Ok(sources)
+
+    async def index_status(self, repository: str) -> Result[IndexStatus, WebError]:
+        """Read selected-repository counts from the actual database."""
+        resolved = self._repository_path(repository)
+        if isinstance(resolved, Err):
+            return resolved
+        prefix = self._stored_prefix(resolved.value)
+        if isinstance(prefix, Err):
+            return prefix
+        counts = await asyncio.to_thread(
+            self.store.read, lambda queries: queries.index_counts(prefix.value)
+        )
+        if isinstance(counts, Err):
+            return Err(
+                WebError.STORAGE_FAILED,
+                context_msg=counts.context_msg or "Could not read index counts",
+                namespace="server::service",
+            )
+        return Ok(
+            IndexStatus(
+                repository=repository, files=counts.value[0], chunks=counts.value[1]
+            )
+        )
+
+    async def remove_index(self, repository: str) -> Result[IndexStatus, WebError]:
+        """Remove database records while retaining cloned source files."""
+        resolved = self._repository_path(repository)
+        if isinstance(resolved, Err):
+            return resolved
+        prefix = self._stored_prefix(resolved.value)
+        if isinstance(prefix, Err):
+            return prefix
+        async with self._index_lock:
+            removed = await asyncio.to_thread(
+                self.store.with_tx,
+                lambda tx: tx.queries.delete_index(prefix.value),
+            )
+        if isinstance(removed, Err):
+            return Err(
+                WebError.INDEX_CLEANUP_FAILED,
+                context_msg=removed.context_msg or "Could not remove index",
+                namespace="server::service",
+            )
+        return await self.index_status(repository)
 
     async def stream_answer(
         self, question: str, sources: list[RetrievedSource]

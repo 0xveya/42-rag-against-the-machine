@@ -138,15 +138,17 @@ def retrieve_hits(
     store: Store,
     question: str,
     k: int = 5,
+    path_prefix: str = "",
 ) -> Result[list[SearchHit], StorageError]:
     """Retrieve internal scored hits for CLI and API adapters."""
-    return _search(store, question, k)
+    return _search(store, question, k, path_prefix)
 
 
 def _search(
     store: Store,
     question: str,
     limit: int,
+    path_prefix: str = "",
 ) -> Result[list[SearchHit], StorageError]:
     """Retrieve ranked chunks through the storage query boundary."""
     if limit <= 0 or not question.strip():
@@ -160,7 +162,7 @@ def _search(
         Result[list[SearchHit], StorageError],
         store.read(
             lambda queries: queries.search_chunks(
-                query, limit, path_terms, identifier_terms
+                query, limit, path_terms, identifier_terms, path_prefix
             )
         ),
     )

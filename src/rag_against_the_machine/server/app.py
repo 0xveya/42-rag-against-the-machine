@@ -10,16 +10,19 @@ from typing import Literal, cast
 import structlog
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ValidationError
 
 from rag_against_the_machine.errors import Err, Nothing, Option, Some, WebError
 from rag_against_the_machine.server.actions import add_repository, run_command
+from rag_against_the_machine.server.inspection import inspect_sources
 from rag_against_the_machine.server.models import (
     AddRepositoryRequest,
     CommandRequest,
     CommandResponse,
     DoneMessage,
     ErrorMessage,
+    IndexStatus,
     QuestionRequest,
     ReindexResponse,
     RepositorySummary,
@@ -91,6 +94,28 @@ def create_app(service: Option[WebRagService] = _DEFAULT_SERVICE) -> FastAPI:
             await log.ainfo("api_stopped")
 
     app = FastAPI(title="rag-against-the-machine", lifespan=lifespan)
+    app.mount(
+        "/explorer",
+        StaticFiles(directory=WEB_DIRECTORY / "explorer"),
+        name="explorer",
+    )
+
+    @app.get("/explore", response_class=FileResponse)
+    async def explorer() -> FileResponse:
+        """Serve the repository and retrieval explorer."""
+        return FileResponse(WEB_DIRECTORY / "explorer" / "index.html")
+
+    @app.get("/api/index/{repository}", response_model=IndexStatus)
+    async def index_status(repository: str) -> IndexStatus | JSONResponse:
+        """Read the selected repository's index counts."""
+        result = await rag_service.index_status(repository)
+        return _error_response(result) if isinstance(result, Err) else result.value
+
+    @app.delete("/api/index/{repository}", response_model=IndexStatus)
+    async def remove_index(repository: str) -> IndexStatus | JSONResponse:
+        """Delete only the selected repository's index records."""
+        result = await rag_service.remove_index(repository)
+        return _error_response(result) if isinstance(result, Err) else result.value
 
     @app.get("/", response_class=FileResponse)
     async def frontend() -> FileResponse:
@@ -177,9 +202,16 @@ def create_app(service: Option[WebRagService] = _DEFAULT_SERVICE) -> FastAPI:
                         )
                         continue
                     sources = retrieved.value
+                    if request.inspect:
+                        await websocket.send_json(
+                            inspect_sources(request.question, sources).model_dump()
+                        )
                     await websocket.send_json(
                         SourcesMessage(data=sources).model_dump()
                     )
+                    if not request.generate or not sources:
+                        await websocket.send_json(DoneMessage().model_dump())
+                        continue
                     await websocket.send_json(
                         StatusMessage(data="generating").model_dump()
                     )
